@@ -516,8 +516,8 @@ const verifChip = b => chip(verif(b)==='Sin verificar' ? 'Sin verificar' : `${ve
 const ubic = b => b.ubicacion || [b.sede, b.piso && (/^\d/.test(b.piso)?'Piso '+b.piso:b.piso), b.ambiente].filter(Boolean).join(' · ');
 const ubVals = v => ({sede:v.sede||'', piso:v.piso||'', ambiente:v.ambiente||'', ubicacion:ubic({sede:v.sede, piso:v.piso, ambiente:v.ambiente})});
 function deepMerge(a,b){ for(const k in b){ const v=b[k]; if(v && typeof v==='object' && !Array.isArray(v) && a[k] && typeof a[k]==='object' && !Array.isArray(a[k])) deepMerge(a[k],v); else a[k]=v; } return a; }
-function who(u){ if(!u) return 'Registro inicial'; if(u===S.me) return 'Tú'; return S.names[u] || S.usuarios?.[u]?.nombre || S.usuarios?.[u]?.email || 'Usuario anterior (claude.ai)'; }
-function nameOf(u){ if(!u) return ''; if(u===S.me) return S.myName || ''; return S.names[u] || ''; }
+function who(u){ if(!u) return 'Registro inicial'; return S.usuarios?.[u]?.nombre || S.names[u] || (u===S.me?S.myName:'') || S.usuarios?.[u]?.email || 'Usuario anterior (claude.ai)'; }
+function nameOf(u){ return u?who(u):''; }
 let toastT;
 function toast(msg){ let t=$('.toast'); if(!t){ t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); document.body.appendChild(t);} t.textContent=msg; clearTimeout(toastT); toastT=setTimeout(()=>t.remove(),3600); }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
@@ -543,15 +543,22 @@ async function retry(fn){
   }
 }
 const colObj = path => (S.data[path] ||= {});
-async function put(path,id,data){
+async function put(path,id,data,options){
+  exigirEscritura();
+  if(/^tomas\/[^/]+\/conteos$/.test(path)) return escribirConteo(path,id,data,options);
+  permisoDocumento(path,id,data);
   if(DB){ local(path,o=>{ o[id]=structuredClone(data); }); return queue(path+'/'+id, ()=>retry(()=>DB.collection(path).doc(id).set(data))).catch(onWriteErr); }
   colObj(path)[id]=structuredClone(data); render();
 }
 async function patch(path,id,partial){
+  exigirEscritura(); permisoDocumento(path,id,partial);
+  if(/^tomas\/[^/]+\/conteos$/.test(path)){ const anterior=structuredClone(colObj(path)[id]||null); return escribirConteo(path,id,{...anterior,...partial},{anterior}); }
   if(DB){ local(path,o=>{ o[id]=deepMerge(structuredClone(o[id]||{}), structuredClone(partial)); }); return queue(path+'/'+id, ()=>retry(()=>DB.collection(path).doc(id).update(partial))).catch(onWriteErr); }
   const o=colObj(path); o[id]=deepMerge(structuredClone(o[id]||{}), structuredClone(partial)); render();
 }
-async function del(path,id){
+async function del(path,id,options){
+  exigirEscritura(); permisoDocumento(path,id,null);
+  if(/^tomas\/[^/]+\/conteos$/.test(path)) return escribirConteo(path,id,null,options||{anterior:structuredClone(colObj(path)[id]||null)});
   if(DB){ local(path,o=>{ delete o[id]; }); return queue(path+'/'+id, ()=>retry(()=>DB.collection(path).doc(id).delete())).catch(onWriteErr); }
   delete colObj(path)[id]; render();
 }
@@ -582,6 +589,84 @@ const bienes = () => Object.entries(S.data.bienes).map(([id,b])=>({id,...b}));
 const mants = () => Object.entries(S.data.mantenimientos).map(([id,m])=>({id,...m}));
 const tomas = () => Object.entries(S.data.tomas).map(([id,t])=>({id,...t}));
 const conteos = tid => S.data[`tomas/${tid}/conteos`] || {};
+/* ---------- Etapa 2.5: permisos y conteos compartidos ---------- */
+const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','tCargarV3','tFormato71','tActivo','activoEditar','uImportar','uUsuarios','sCategorias']);
+let accionActual=null, actividadT=null;
+function errorPermiso(msg){ return Object.assign(new Error(msg),{code:'app-permission'}); }
+function exigirEscritura(){ if(S.readonly) throw errorPermiso('Tienes acceso de solo lectura.'); }
+function exigirAdmin(){ exigirEscritura(); if(!S.admin) throw errorPermiso('Solo un administrador puede realizar esta acción.'); }
+function exigirLote(n){ exigirEscritura(); if(n>=100) exigirAdmin(); }
+function permisoDocumento(path,id,d){
+  if(path==='tomas'&&(!d||'cierre' in d||'uCierre' in d||d.estado==='cerrada')) exigirAdmin();
+  if(path==='config'&&/^(activoAlias$|crPrioridad$|sistemasCategorias$|activo-alias-prev-|toma-r1-|toma-r3-|toma-eliminada-)/.test(id)) exigirAdmin();
+}
+function aplicarPermisos(){
+  document.querySelectorAll('[data-act]').forEach(el=>{ if(ADMIN_ACT.has(el.dataset.act)) el.hidden=!S.admin||S.readonly; });
+  document.querySelectorAll('[data-admin]').forEach(el=>el.hidden=!S.admin||S.readonly);
+}
+function usuariosRecientes(tid,ahora=Date.now()){
+  const U=new Map(); for(const c of Object.values(conteos(tid))){ const ms=Date.parse(c.t); if(c.u&&ms<=ahora&&ms>ahora-600000&&(!U.has(c.u)||U.get(c.u).ms<ms)) U.set(c.u,{u:c.u,ms,lugar:ubic(c)||'sin ubicación'}); }
+  return [...U.values()].sort((a,b)=>who(a.u).localeCompare(who(b.u),'es'));
+}
+function actividadHtml(tid){ const L=usuariosRecientes(tid); return `<div class="small muted" data-online title="Actividad registrada en los últimos 10 minutos">En línea: ${L.length?L.map(x=>esc(who(x.u))).join(' · '):'sin actividad reciente'}</div>`; }
+function programarActividad(){
+  clearTimeout(actividadT); if(S.view!=='inventario'||!S.tomaSel)return;
+  const L=usuariosRecientes(S.tomaSel); if(L.length) actividadT=setTimeout(render,Math.max(50,Math.min(...L.map(x=>x.ms+600001-Date.now()))));
+}
+function limpioConteo(c){ if(!c||c._del)return null; const d=structuredClone(c); delete d._m; return d; }
+function firmaDatos(c){
+  const ordenar=v=>Array.isArray(v)?v.map(ordenar):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).filter(k=>!['_m','_rev','prev'].includes(k)).sort().map(k=>[k,ordenar(v[k])])):v;
+  return JSON.stringify(ordenar(limpioConteo(c)));
+}
+function versionConteo(c){ const d=limpioConteo(c); return d?d._rev||firmaDatos(d):null; }
+async function escribirConteo(path,bid,datos,{anterior=null}={}){
+  exigirEscritura(); const tid=path.split('/')[1],esperado=versionConteo(anterior);
+  // La revisión cambia incluso si el contenido vuelve a ser igual. No se publica nada de forma optimista.
+  const nuevo=datos?{...structuredClone(datos),u:S.me||null,_rev:uid()}:null;
+  const decidir=(t,raw)=>{
+    exigirEscritura(); const actual=limpioConteo(raw);
+    if(!t||t._del||t.estado!=='abierta')throw new Error('La toma ya no está abierta.');
+    if(versionConteo(actual)!==esperado)return {conflicto:true,actual};
+    return {dato:nuevo?{...nuevo,...(actual?{prev:actual}:{})}:null};
+  };
+  const resultado=await queue(path+'/'+bid,async()=>{
+    if(!DB)return decidir(S.data.tomas[tid],colObj(path)[bid]);
+    if(typeof DB.runTransaction!=='function')throw new Error('Conecta Firebase para guardar un conteo compartido.');
+    return DB.runTransaction(async tx=>{
+      const tr=DB.doc('tomas/'+tid),cr=DB.doc(path+'/'+bid);
+      const [ts,cs]=await Promise.all([tx.get(tr),tx.get(cr)]);
+      const r=decidir(ts.exists?ts.data():null,cs.exists?cs.data():null);
+      if(!r.conflicto)tx.set(cr,r.dato||{_del:true});
+      return r;
+    });
+  }).catch(e=>{if(['unavailable','deadline-exceeded','failed-precondition'].includes(e.code))throw new Error('No se guardó el conteo. Para evitar sobrescribir a otra persona, necesitas conexión. Vuelve a intentarlo cuando se restablezca.');throw e;});
+  if(resultado.conflicto){
+    const actual=resultado.actual; if(actual)colObj(path)[bid]=actual;else delete colObj(path)[bid];render();
+    throw Object.assign(new Error(`Ya registrado por ${actual?who(actual.u):'otra persona'} en ${actual?ubic(actual)||'sin ubicación':'un registro que cambió'}.`),{code:'conteo-conflict',tid,bid,actual,propuesto:nuevo});
+  }
+  if(resultado.dato)colObj(path)[bid]=resultado.dato;else delete colObj(path)[bid];render();return resultado.dato;
+}
+function mostrarConflicto(e){
+  const c=e.actual,b=S.data.bienes[e.bid]||{},d=e.propuesto;
+  openForm({title:'Bien ya registrado',note:`ID ${esc(b.idEtq||b.codigo||e.bid)} · ${esc(b.nombre)}<p>${esc(e.message)}</p>${d?`Ahora: <b>${esc(ubic(d)||'sin ubicación')}</b>`:''}`,fields:[],ok:d?(d.r==='No localizado'?'Confirmar no localizado':'Mover aquí'):'Revisar de nuevo',submit:async()=>{
+    if(!d)return;
+    try{await put(`tomas/${e.tid}/conteos`,e.bid,{...d,t:nowIso()},{anterior:c});toast('Registro actualizado. Se conservó el anterior.');}
+    catch(err){if(err.code==='conteo-conflict'){mostrarConflicto(err);return {keep:true};}throw err;}
+  }});
+}
+async function guardarConteoUI(tid,bid,d,options){
+  try{return await put(`tomas/${tid}/conteos`,bid,d,options);}
+  catch(e){if(e.code==='conteo-conflict'){mostrarConflicto(e);return null;}throw e;}
+}
+async function guardarGrupoConteos(tid,items,onProg){
+  const conflictos=[];let guardados=0;
+  const r=await runMany(items.map(x=>async()=>{try{await put(`tomas/${tid}/conteos`,x.id,x.d,{anterior:x.anterior||null});guardados++;}catch(e){if(e.code==='conteo-conflict')conflictos.push(e);else throw e;}}),4,onProg);
+  return {...r,guardados,omitidos:conflictos.length,conflictos};
+}
+function conflictosGrupo(r){
+  if(!r.conflictos.length)return false;S.conteosConflictos=r.conflictos;
+  openForm({title:'Conteos de otras personas conservados',note:`${r.guardados} guardados · ${r.omitidos} sin reemplazar.${r.fail?` ${r.fail} con error.`:''}<p>Revisa cada registro antes de moverlo.</p>${r.conflictos.map((e,i)=>`<p>${esc(S.data.bienes[e.bid]?.codigo||e.bid)}: ${esc(e.message)} <button type="button" class="btn sm" data-act="tMoverConflicto" data-i="${i}">Revisar</button></p>`).join('')}`,fields:[],ok:'Listo',submit:async()=>{}});return true;
+}
 let distCache={key:null};
 function distinct(field){ const key=Object.keys(S.data.bienes).length+'|'+(S._ver||0); if(distCache.key!==key) distCache={key}; if(distCache[field]) return distCache[field]; const s=new Set(); bienes().forEach(b=>{ const v=field==='ubicacion'?ubic(b):b[field]; if(v) s.add(v); }); if(field==='sede') SEDE_STD.forEach(x=>s.add(x)); return distCache[field]=[...s].sort((a,b)=>a.localeCompare(b,'es')); }
 function nextCode(tipo){ const p=(tipo||'AF')+'-'; let max=0; bienes().forEach(b=>{ if(b.codigo && b.codigo.toUpperCase().startsWith(p)){ const n=parseInt(b.codigo.slice(p.length),10); if(n>max) max=n; } }); return p+String(max+1).padStart(4,'0'); }
@@ -615,7 +700,7 @@ function doRender(){
   if(S.sel) renderDrawer();
   if(!kept && $('#scanres')) renderScanRes();
   if(fid && !kept){ const el=document.getElementById(fid); if(el){ el.focus(); if(ss && el.setSelectionRange) try{ el.setSelectionRange(ss[0],ss[1]); }catch(e){} } }
-  resolveNames();
+  resolveNames(); aplicarPermisos(); programarActividad();
 }
 /* Etapa 2.4: navegación en 4 secciones con subpestañas */
 const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}};
@@ -761,11 +846,11 @@ function igualesCambios(v){
  if(!Object.keys(d).length)throw new Error('Elige al menos un dato para actualizar.');return d;
 }
 async function igualesAplicar(L,d){
- if(S.readonly)throw new Error('La cuenta es de solo lectura.');
+ exigirLote(L.length);
  const key='lote-'+uid(),fecha=nowIso(),prev=L.map(b=>({id:b.id,prev:igSnapshot(S.data.bienes[b.id]),nuevo:d}));
  if(new Blob([JSON.stringify(prev)]).size>800000)throw new Error('Lote demasiado grande. Divide los IDs en varios lotes.');
  await put('config',key,{tipo:'Actualización de bienes iguales',u:S.me||null,fecha,estado:'en curso',prev});
- let done=0;try{for(const x of prev){const b=S.data.bienes[x.id];if(!b)throw new Error('Una ficha ya no existe.');
+ let done=0;try{for(const x of prev){exigirLote(L.length);const b=S.data.bienes[x.id];if(!b)throw new Error('Una ficha ya no existe.');
   const before=structuredClone(b);try{await patch('bienes',x.id,{...d,act:nowIso(),hist:[...(b.hist||[]),{...ev('Actualización en lote',key),lote:key,prev:x.prev,nuevo:d}]});}catch(e){S.data.bienes[x.id]=before;throw e;}done++;modalProgress(`Actualizando ${done} de ${prev.length}…`);
  }await patch('config',key,{estado:'terminada',done});}
  catch(e){await patch('config',key,{estado:'incompleta',done});throw e;}
@@ -774,7 +859,7 @@ async function igualesAplicar(L,d){
 function igualesReversibles(key){const lote=S.data.config[key];if(!lote)return [];return lote.prev.filter(x=>{const b=S.data.bienes[x.id],h=b?.hist||[],e=h[h.length-1];return e?.lote===key&&e.tipo==='Actualización en lote'&&Object.entries(x.nuevo).every(([k,v])=>JSON.stringify(b[k]??null)===JSON.stringify(v));});}
 async function igualesRevertir(key){
  if(S.readonly)throw new Error('La cuenta es de solo lectura.');
- const L=igualesReversibles(key);let n=0;for(const x of L){if(!igualesReversibles(key).some(a=>a.id===x.id))continue;const b=S.data.bienes[x.id];
+ const L=igualesReversibles(key);exigirLote(S.data.config[key]?.prev?.length||L.length);let n=0;for(const x of L){exigirLote(S.data.config[key]?.prev?.length||L.length);if(!igualesReversibles(key).some(a=>a.id===x.id))continue;const b=S.data.bienes[x.id];
   const restore=Object.fromEntries(Object.keys(x.nuevo).map(k=>[k,x.prev[k]??null]));const before=structuredClone(b);try{await patch('bienes',x.id,{...restore,act:nowIso(),hist:[...(b.hist||[]),{...ev('Reversión de lote',key),lote:key,prev:igSnapshot(b)}]});}catch(e){S.data.bienes[x.id]=before;throw e;}n++;
  }const quedan=igualesReversibles(key).length;await patch('config',key,{estado:quedan?'reversión incompleta':'revisada',reversion:nowIso()});return n;
 }
@@ -784,16 +869,18 @@ function igualesPanel(key){
  S.igKey=key;const g=igualesActual();if(!g){toast('El grupo ya no está en estos filtros.');return;}
  const M=new Map();for(const b of g.items){const u=ubic(b)||'Sin ubicación',c=b.condicion||'Por evaluar',k=JSON.stringify([u,c]);if(!M.has(k))M.set(k,{u,c,items:[]});M.get(k).items.push(b);}
  const lotes=Object.entries(S.data.config).filter(([id,l])=>id.startsWith('lote-')&&l.tipo==='Actualización de bienes iguales'&&l.prev?.some(x=>g.items.some(b=>b.id===x.id))).sort((a,b)=>String(b[1].fecha).localeCompare(String(a[1].fecha)));
- const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(key)}</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="display:block"><p>${g.items.length} bienes · ${money(g.h)} histórico · ${money(g.n)} neto</p><div class="row"><button class="btn" data-act="igGrupoCopiar">Copiar para Excel</button><button class="btn primary ro-hide" data-act="igLote">Actualizar en lote</button></div><h3>Ubicación × estado</h3><div class="tbl-wrap"><table><thead><tr><th>Ubicación</th><th>Estado</th><th>Cantidad</th><th>IDs</th></tr></thead><tbody>${[...M.values()].map(x=>`<tr><td>${esc(x.u)}</td><td>${esc(x.c)}</td><td>${x.items.length}</td><td>${esc(igIds(x.items)||'Sin etiqueta')}</td></tr>`).join('')}</tbody></table></div><h3>Fichas individuales</h3><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Código ADM / contable</th><th>Ubicación</th><th>Estado</th></tr></thead><tbody>${g.items.map(b=>`<tr><td>${esc(b.idEtq??'Sin etiqueta')}</td><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.codigo||b.id)} · ${esc(b.codCont||'')}</button></td><td>${esc(ubic(b))}</td><td>${esc(b.condicion||'Por evaluar')}</td></tr>`).join('')}</tbody></table></div>${lotes.length?`<h3>Lotes de este grupo</h3>${lotes.map(([id,l])=>`<div class="row between"><span>${esc(fmtDT(l.fecha))} · ${l.prev.length} fichas · ${esc(l.estado)}</span><button class="btn ro-hide" data-act="igRevertir" data-id="${esc(id)}" ${igualesReversibles(id).length?'':'disabled'}>Revertir lote</button></div>`).join('')}`:''}</div><div class="m-f"><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();
+ const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(key)}</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="display:block"><p>${g.items.length} bienes · ${money(g.h)} histórico · ${money(g.n)} neto</p><div class="row"><button class="btn" data-act="igGrupoCopiar">Copiar para Excel</button><button class="btn primary ro-hide" data-act="igLote">Actualizar en lote</button></div><h3>Ubicación × estado</h3><div class="tbl-wrap"><table><thead><tr><th>Ubicación</th><th>Estado</th><th>Cantidad</th><th>IDs</th></tr></thead><tbody>${[...M.values()].map(x=>`<tr><td>${esc(x.u)}</td><td>${esc(x.c)}</td><td>${x.items.length}</td><td>${esc(igIds(x.items)||'Sin etiqueta')}</td></tr>`).join('')}</tbody></table></div><h3>Fichas individuales</h3><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Código ADM / contable</th><th>Ubicación</th><th>Estado</th></tr></thead><tbody>${g.items.map(b=>`<tr><td>${esc(b.idEtq??'Sin etiqueta')}</td><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.codigo||b.id)} · ${esc(b.codCont||'')}</button></td><td>${esc(ubic(b))}</td><td>${esc(b.condicion||'Por evaluar')}</td></tr>`).join('')}</tbody></table></div>${lotes.length?`<h3>Lotes de este grupo</h3>${lotes.map(([id,l])=>`<div class="row between"><span>${esc(fmtDT(l.fecha))} · ${l.prev.length} fichas · ${esc(l.estado)}</span><button class="btn ro-hide" data-act="igRevertir" ${l.prev.length>=100?'data-admin':''} data-id="${esc(id)}" ${igualesReversibles(id).length?'':'disabled'}>Revertir lote</button></div>`).join('')}`:''}</div><div class="m-f"><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();aplicarPermisos();
 }
 function igualesLoteModal(){const g=igualesActual();if(!g)return;const key=g.key;
  openForm({title:'Actualizar en lote',wide:true,note:`${esc(key)} · ${g.items.length} fichas. Los campos vacíos conservan el valor actual. ${g.items.some(b=>b.idEtq==null)?'Las fichas sin etiqueta no se incluyen en rangos de ID.':''}`,fields:[{k:'rangos',l:'IDs o rangos',v:rangoIds(g.items.filter(b=>b.idEtq!=null).map(b=>Number(b.idEtq))),req:true,full:true},...['condicion','oper'].map(k=>({k,l:k==='condicion'?'Conservación':'Operatividad',t:'select',opts:[['','Conservar valor actual'],...(k==='condicion'?COND:OPER)]})),F.sede(),F.piso(),F.ambiente(),F.responsable()],ok:'Ver vista previa',submit:async v=>{
   let r,d;try{r=analizarRangos(v.rangos.replace(/–/g,'-'));d=igualesCambios(v);}catch(e){return {error:e.message};}
   const otros=r.bienes.filter(b=>activoKey(b.nombre)!==key),fuera=r.bienes.filter(b=>!g.items.some(x=>x.id===b.id));
   const avisos=[r.inexistentes.length?`IDs inexistentes: ${rangoIds(r.inexistentes)}`:'',otros.length?`IDs de otro ACTIVO: ${igIds(otros)}`:'',fuera.length?`IDs fuera del grupo filtrado: ${igIds(fuera)}`:''].filter(Boolean);
+  if(!S.admin&&r.bienes.length>=100)avisos.push('Solo un administrador puede actualizar 100 o más bienes. Elige como máximo 99 IDs.');
   const blocked=avisos.length||!r.bienes.length,initial=Object.fromEntries(r.bienes.map(b=>[b.id,JSON.stringify({...igSnapshot(b),hist:b.hist||[]})]));
   openForm({title:'Vista previa del lote',wide:true,note:`<b>${r.bienes.length} bienes</b> · IDs ${esc(igIds(r.bienes))}<p>${Object.entries(d).filter(([k])=>!['amb','cuad','pt','ubicacion'].includes(k)).map(([k,v])=>`${esc(IMP_LABEL[k]||k)}: <b>${esc(v)}</b>`).join('<br>')}</p>${avisos.map(a=>`<p class="err">${esc(a)}</p>`).join('')}${blocked?'<p>Actualización bloqueada. Vuelve a corregir los rangos.</p>':'<p>Se guardará el valor anterior en cada ficha y en el respaldo del lote. No modifica etiquetas, códigos, valores ni conteos de la toma.</p>'}`,fields:!blocked&&r.bienes.length>=20?[{k:'conf',l:'Escribe ACTUALIZAR para confirmar',req:true,full:true}]:[],ok:blocked?'Corregir rangos':'Aplicar actualización',submit:async w=>{
    if(blocked){setTimeout(igualesLoteModal,0);return;}
+   exigirLote(r.bienes.length);
    if(r.bienes.length>=20&&w.conf!=='ACTUALIZAR')return {error:'Escribe ACTUALIZAR para confirmar.'};
    if(r.bienes.some(b=>!S.data.bienes[b.id]||activoKey(S.data.bienes[b.id].nombre)!==key||JSON.stringify({...igSnapshot(S.data.bienes[b.id]),hist:S.data.bienes[b.id].hist||[]})!==initial[b.id]))return {error:'Una ficha cambió desde la vista previa. Cancela y vuelve a revisar el lote.'};
    try{await igualesAplicar(r.bienes,d);}catch(e){return {error:'El lote quedó incompleto. Conservamos el respaldo; revisa «Lotes de este grupo» antes de reintentar.'};}
@@ -840,7 +927,7 @@ function alcanceTxt(t){ if(!t.alcance) return 'Todos los bienes'; const [k,...v]
 function vInv(){
   if(S.tomaSel && S.data.tomas[S.tomaSel]) return vToma(S.tomaSel);
   const T=tomas().sort((a,b)=>(a.estado==='abierta'?0:1)-(b.estado==='abierta'?0:1) || (b.creado||'').localeCompare(a.creado||''));
-  return `<div class="row between"><h2>Toma de inventario</h2><div class="row ro-hide"><details class="menu right"><summary class="btn">Preparar datos <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tCargarV3">Cargar etiquetas V3</button><button class="mi" role="menuitem" data-act="tActivo">Revisar descripciones</button><button class="mi" role="menuitem" data-act="tFormato71">Enriquecer con Formato 7.1</button></div></details><button class="btn primary" data-act="tNueva">Nueva toma de inventario</button></div></div>
+  return `<div class="row between"><h2>Toma de inventario</h2><div class="row ro-hide"><details class="menu right" data-admin><summary class="btn">Preparar datos <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tCargarV3">Cargar etiquetas V3</button><button class="mi" role="menuitem" data-act="tActivo">Revisar descripciones</button><button class="mi" role="menuitem" data-act="tFormato71">Enriquecer con Formato 7.1</button></div></details><button class="btn primary" data-act="tNueva">Nueva toma de inventario</button></div></div>
   <p class="muted" style="margin:0;max-width:75ch">Verifica en campo que cada bien exista, dónde está, quién lo usa y en qué estado. Fija el ambiente donde estás, registra los IDs de etiqueta por rangos o escribe a mano el ID o código, y anota solo las diferencias. Al cerrar la toma se actualizan las fichas y se marcan los no localizados.</p>
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Toma</th><th>Alcance</th><th>Avance</th><th>Por conciliar</th><th>No localizados</th><th>Sobrantes</th><th>Estado</th></tr></thead><tbody>${T.map(t=>{ const p=tomaProg(t); return `<tr class="click" data-act="openToma" data-id="${esc(t.id)}" tabindex="0"><td class="w"><div class="nm">${esc(t.nombre)}</div><div class="small muted">Iniciada ${fmtD(t.creado)}${t.cierre?` · cerrada ${fmtD(t.cierre)}`:''}</div></td><td class="w" data-l="Alcance">${esc(alcanceTxt(t))}</td><td class="grow" style="min-width:140px" data-l="Avance"><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div><div class="small muted num">${p.ver??p.ok} de ${p.tot}</div></td><td class="num" data-l="Por conciliar">${p.conc}</td><td class="num" data-l="No localiz.">${p.nol}</td><td class="num" data-l="Sobrantes">${(t.sobrantes||[]).length}</td><td>${t.estado==='abierta'?chip('En curso','c-warn'):chip('Cerrada','c-ok')}</td></tr>`; }).join('') || `<tr><td colspan="7" class="empty">Aún no hay tomas de inventario.</td></tr>`}</tbody></table></div></div>`;
 }
@@ -867,7 +954,7 @@ function vToma(id){
   const shown=L.slice(0,S.tlim);
   const dl=(id,arr)=>`<datalist id="${id}">${arr.map(o=>`<option value="${esc(o)}">`).join('')}</datalist>`;
   const rowOf=x=>{ const b=x.b; const c=x.c; const r=resOf(x);
-    const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}` : '';
+    const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}<div class="small muted">Registrado por ${esc(nameOf(c.u)||'Registro inicial')}</div>` : '';
     const acts = !open ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
     return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
   const rows=S.tGroup?gruposHtml(L,L0.filter(x=>(!S.tCR||crDe(x.b)===S.tCR)&&(!S.tPrioridad||String(x.b.prioridadCR)===S.tPrioridad)&&(!S.tActivoFiltro||activoKey(x.b.nombre)===S.tActivoFiltro)),rowOf,open,resOf):shown.map(rowOf).join('');
@@ -878,8 +965,9 @@ function vToma(id){
   ${S.tGroup?'':more(shown.length,L.length,'masToma')}
 `;
   return `<div class="row"><button class="btn ghost" data-act="tVolver">← Todas las tomas</button></div>
-  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${open?`<button class="btn ro-hide" data-act="tCerrar">Cerrar toma</button><details class="menu right ro-hide"><summary class="btn" aria-label="Más acciones de la toma">⋯ Más</summary><div class="menu-list" role="menu"><button class="mi danger" role="menuitem" data-act="tEliminar">Eliminar toma…</button></div></details>`:''}</div></div>
+  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${open&&S.admin?`<button class="btn ro-hide" data-act="tCerrar">Cerrar toma</button><details class="menu right ro-hide"><summary class="btn" aria-label="Más acciones de la toma">⋯ Más</summary><div class="menu-list" role="menu"><button class="mi danger" role="menuitem" data-act="tEliminar">Eliminar toma…</button></div></details>`:''}</div></div>
   ${(()=>{ const n=open?fichasCierreInterrumpido(t).length:0; return n?`<div class="banner warn"><span class="grow"><b>Un cierre se interrumpió:</b> ${n} fichas quedaron con el resultado de esta toma (por ejemplo «No localizado») aunque la toma sigue abierta.</span><button class="btn sm primary ro-hide" data-act="tRevertir">Revertir esas fichas</button></div>`:''; })()}
+  ${actividadHtml(id)}
   <div class="card" style="display:grid;gap:10px"><div class="row between small"><span><b class="num">${p.ver??p.ok}</b> de <span class="num">${p.tot}</span> verificados · <span class="num">${p.enc}</span> encontrados · <span class="num">${p.conc}</span> por conciliar · <span class="num">${p.nol}</span> no localizados · <span class="num">${sob.length}</span> sobrantes</span><span class="num">${p.tot?Math.round((p.ver??p.ok)/p.tot*100):0}%</span></div><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div></div>
   ${open?`<div class="tomagrid ro-hide">
    <div class="card herecard"><details class="herebox" ${(S.hereOpen??!(H.piso||H.ambiente))?'open':''}><summary><span class="hs-l"><b>1. Dónde estoy</b></span><span class="hs-e">Cambiar</span><span style="flex-basis:100%"></span><b id="hs-v" class="hs-v">${esc(hereLugar())}</b></summary><p class="hint" style="margin:10px 0">Se aplica a cada bien que registres. Si un bien está en otro lugar, usa «Detalle…».</p>
@@ -950,18 +1038,20 @@ function openForm({title, fields, submit, note, ok='Guardar', danger=false, wide
     return `<div class="fld ${x.full?'full':''}"><label for="${id}">${esc(x.l)}${x.req?' <span class="req" aria-hidden="true">*</span>':''}</label>${inp}${x.help?`<span class="help">${esc(x.help)}</span>`:''}</div>`; }).join('');
   const m=$('#modal'); m.classList.toggle('wide',wide);
   m.innerHTML=`<form method="dialog" data-form="modal"><div class="m-h"><h2>${esc(title)}</h2><button type="button" class="btn ghost m-x" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b">${note?`<div class="m-note">${note}</div>`:''}${f}<div class="m-extra" id="mextra"></div><p class="err" id="ferr" hidden></p></div><div class="m-f"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button type="submit" class="btn ${danger?'danger':'primary'}" id="mok">${esc(ok)}</button></div></form>`;
-  formCtx={fields, submit};
+  formCtx={fields, submit, admin:ADMIN_ACT.has(accionActual), lectura:RO_OK.includes(accionActual)};
+  aplicarPermisos();
   if(!m.open) m.showModal(); const first=m.querySelector('.inp'); first&&first.focus();
 }
 async function submitModal(form){
   if(S.busy) return;
+  if((formCtx.admin&&!S.admin)||(S.readonly&&!formCtx.lectura)){toast('Tu cuenta ya no tiene permiso para guardar esta acción.');return;}
   const vals={}; const miss=[];
   formCtx.fields.forEach(x=>{ const el=form.querySelector(`[name="${x.k}"]`); let v; if(x.t==='file'){ v=el&&el.files[0]||null; } else { v=el? el.value.trim() : ''; if(x.t==='number') v = v===''? null : Number(v); } vals[x.k]=v; if(x.req && (v===''||v==null)) miss.push(x.l); });
   const err=$('#ferr');
   if(miss.length){ err.textContent='Completa: '+miss.join(', ')+'.'; err.hidden=false; return; }
   const ok=$('#mok'); S.busy=true; ok.disabled=true;
   try{ const r=await formCtx.submit(vals); if(r && r.error){ err.textContent=r.error; err.hidden=false; return; } if(r && r.keep) return; $('#modal').close(); }
-  catch(e){ console.warn(e); err.textContent='No se pudo guardar. Inténtalo otra vez.'; err.hidden=false; }
+  catch(e){ console.warn(e); err.textContent=e.message||'No se pudo guardar. Inténtalo otra vez.'; err.hidden=false; }
   finally{ S.busy=false; ok.disabled=false; }
 }
 function confirmBox(title, msg, ok, fn){ openForm({title, fields:[], note:esc(msg), ok, danger:true, submit:fn}); }
@@ -1040,16 +1130,16 @@ const ACT = {
         const id=uid(); await put('tomas',id,{nombre,alcance:v.alcance,estado:'abierta',creado:nowIso(),u:S.me||null,esperados:esp,sobrantes:[]}); S.tomaSel=id; S.tf='pendientes'; S.tq=''; S.tlim=PAGE; location.hash='inventario'; render(); toast(`Toma creada con ${esp.length} bienes por verificar.`); } }); },
   openToma(id){ S.tGroup='activo';S.tPrioridad='';S.tActivoFiltro='';S.scanQ=''; S.tomaSel=id; S.tq=''; S.tlim=PAGE; S.tf= S.data.tomas[id]?.estado==='abierta'?'pendientes':'todos'; ensureSubs(); if(S.view!=='inventario'){ location.hash='inventario'; } render(); window.scrollTo(0,0); },
   tVolver(){ S.tomaSel=null; render(); },
-  tRapido(bid){ marcar(bid); },
-  tNoLoc(bid){ openForm({title:'Marcar como no localizado', fields:[{k:'obs',l:'Observaciones de campo',t:'textarea',full:true,ph:'Dónde se buscó, a quién se consultó…'}], ok:'Marcar no localizado', submit:async v=>{ await put(`tomas/${S.tomaSel}/conteos`, bid, {r:'No localizado', obs:v.obs, u:S.me||null, t:nowIso()}); } }); },
-  tQuitar(bid){ del(`tomas/${S.tomaSel}/conteos`, bid); },
-  tDetalle(bid){ const b=S.data.bienes[bid]||{}; const c=conteos(S.tomaSel)[bid]; const H=S.here; const base=c||{r:'Encontrado',cant:1,sede:H.sede||b.sede,piso:H.piso||b.piso,ambiente:H.ambiente||b.ambiente,cu:H.cu||b.responsable,c:H.c,o:H.o,amb:H.amb||b.amb||'',cuad:H.cuad||b.cuad||'',pt:H.pt||b.pt||null};
+  tRapido(bid){ return marcar(bid); },
+  tNoLoc(bid){ const tid=S.tomaSel; openForm({title:'Marcar como no localizado', fields:[{k:'obs',l:'Observaciones de campo',t:'textarea',full:true,ph:'Dónde se buscó, a quién se consultó…'}], ok:'Marcar no localizado', submit:async v=>{ const r=await guardarConteoUI(tid,bid,{r:'No localizado',obs:v.obs,u:S.me||null,t:nowIso()});if(!r)return {keep:true}; } }); },
+  async tQuitar(bid){try{await del(`tomas/${S.tomaSel}/conteos`,bid);}catch(e){if(e.code==='conteo-conflict'){mostrarConflicto(e);return;}throw e;} },
+  tDetalle(bid){ const tid=S.tomaSel;const b=S.data.bienes[bid]||{}; const c=structuredClone(conteos(tid)[bid]||null); const H=S.here; const base=c||{r:'Encontrado',cant:1,sede:H.sede||b.sede,piso:H.piso||b.piso,ambiente:H.ambiente||b.ambiente,cu:H.cu||b.responsable,c:H.c,o:H.o,amb:H.amb||b.amb||'',cuad:H.cuad||b.cuad||'',pt:H.pt||b.pt||null};
     openForm({title:`${b.codigo||''} · ${b.nombre||''}`, note:`<span class="small">${esc([b.marca,b.modelo,b.serie&&'S/N '+b.serie].filter(Boolean).join(' · '))}${b.refDoc?' · Ref.: '+esc(b.refDoc):''}</span>`, fields:[{k:'r',l:'Resultado de verificación',t:'select',opts:RES,v:base.r,req:true,help:'Por conciliar: se encontró, pero algo no coincide con el registro (serie, descripción, cantidad).'}, {k:'cant',l:'Cantidad hallada',t:'number',v:base.cant??1}, {k:'sede',l:'Sede / edificio',v:base.sede,list:'sede'}, {k:'piso',l:'Piso',v:base.piso}, {k:'ambiente',l:'Ambiente / ubicación física',v:base.ambiente,list:'ambiente'}, {k:'cu',l:'Custodio / usuario',v:base.cu,list:'responsable'}, {k:'c',l:'Conservación',t:'select',opts:COND,v:base.c}, {k:'o',l:'Operatividad',t:'select',opts:OPER,v:base.o}, {k:'ev',l:'Evidencia / foto',v:base.ev,ph:'N.º o nombre de la foto'}, {k:'obs',l:'Observaciones de campo',t:'textarea',full:true,v:base.obs}],
-      submit:async v=>{if(v.cant!=null&&![0,1].includes(v.cant))return {error:'Una fila representa un bien: usa cantidad 0 o 1. Para varios bienes, registra sus IDs.'};if(v.r!=='No localizado')v.cant=1;const d={...v, u:S.me||null, t:nowIso(), amb:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.amb||''):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.amb||''):''), cuad:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.cuad||''):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.cuad||''):''), pt:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.pt||null):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.pt||null):null)}; if(v.r==='No localizado'){ ['sede','piso','ambiente','cu','c','o','cant'].forEach(k=>delete d[k]); } await put(`tomas/${S.tomaSel}/conteos`, bid, d); } }); },
-  tCerrar(){ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const p=tomaProg(t); const pend=p.tot-p.ver; const muchos=true;
-    openForm({title:'Cerrar toma de inventario', ok:'Cerrar y actualizar fichas', danger:muchos, note:`<b>${p.enc}</b> encontrados · <b>${p.conc}</b> por conciliar · <b>${p.nol}</b> marcados no localizados · <b>${pend}</b> sin verificar · <b>${(t.sobrantes||[]).length}</b> sobrantes.<br><br>Al cerrar, la ficha de cada bien verificado toma la ubicación, el custodio y el estado encontrados. ${pend?`<b style="color:var(--bad)">Los ${pend} sin verificar quedarán como NO LOCALIZADOS en sus fichas.</b> `:''}Nadie se da de baja automáticamente. Después de cerrar no se puede seguir marcando.${pend?'<br><br>Si aún estás contando, cancela y sigue con la toma abierta.':''}`,
-      fields:muchos?[{k:'conf',l:`Para confirmar, escribe CERRAR (${Math.round(pend/p.tot*100)}% de los bienes aún no se verifican)`,req:true,full:true,ph:'CERRAR'}]:[],
-      submit:async v=>{ if(muchos&&String(v.conf||'').trim().toUpperCase()!=='CERRAR') return {error:'Escribe CERRAR para confirmar, o cancela.'}; return await cerrarToma(t); } }); },
+      submit:async v=>{if(v.cant!=null&&![0,1].includes(v.cant))return {error:'Una fila representa un bien: usa cantidad 0 o 1. Para varios bienes, registra sus IDs.'};if(v.r!=='No localizado')v.cant=1;const d={...v, u:S.me||null, t:nowIso(), amb:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.amb||''):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.amb||''):''), cuad:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.cuad||''):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.cuad||''):''), pt:(v.ambiente===base.ambiente&&v.piso===base.piso)?(base.pt||null):(v.ambiente===S.here.ambiente&&v.piso===S.here.piso?(S.here.pt||null):null)}; if(v.r==='No localizado'){ ['sede','piso','ambiente','cu','c','o','cant'].forEach(k=>delete d[k]); } const r=await guardarConteoUI(tid,bid,d,{anterior:c});if(!r)return {keep:true}; } }); },
+  tCerrar(){ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const p=tomaProg(t); const pend=p.tot-p.ver; const muchos=true;const otros=usuariosRecientes(t.id).filter(x=>x.u!==S.me);
+    openForm({title:'Cerrar toma de inventario', ok:'Cerrar y actualizar fichas', danger:muchos, note:`${otros.length?`<p class="err">Hay otras personas contando: ${otros.map(x=>esc(who(x.u))).join(', ')} (actividad en los últimos 10 minutos). Confirma con ellas antes de cerrar.</p>`:''}<b>${p.enc}</b> encontrados · <b>${p.conc}</b> por conciliar · <b>${p.nol}</b> marcados no localizados · <b>${pend}</b> sin verificar · <b>${(t.sobrantes||[]).length}</b> sobrantes.<br><br>Al cerrar, la ficha de cada bien verificado toma la ubicación, el custodio y el estado encontrados. ${pend?`<b style="color:var(--bad)">Los ${pend} sin verificar quedarán como NO LOCALIZADOS en sus fichas.</b> `:''}Nadie se da de baja automáticamente. Después de cerrar no se puede seguir marcando.${pend?'<br><br>Si aún estás contando, cancela y sigue con la toma abierta.':''}`,
+      fields:[...(otros.length?[{k:'actividad',l:'Hay otras personas contando',t:'select',opts:[['','Cancelar y coordinar primero'],['si','Ya coordiné; cerrar de todos modos']],req:true,full:true}]:[]),...(muchos?[{k:'conf',l:`Para confirmar, escribe CERRAR (${Math.round(pend/p.tot*100)}% de los bienes aún no se verifican)`,req:true,full:true,ph:'CERRAR'}]:[])],
+      submit:async v=>{ if(muchos&&String(v.conf||'').trim().toUpperCase()!=='CERRAR') return {error:'Escribe CERRAR para confirmar, o cancela.'}; return await cerrarToma(t,{avisados:otros.map(x=>x.u)}); } }); },
   tSobrante(){ openForm({title:'Registrar bien no encontrado en el registro', note:'Queda como <b>sobrante</b> de esta toma, con su ambiente. Después se concilia con el registro o se da de alta como bien nuevo.', fields:[{k:'d',l:'Descripción del bien',req:true,full:true,v:S._pendSob||'',ph:'Ej.: Silla giratoria negra'}, {k:'cant',l:'Cantidad',t:'number',v:1}, F.marca(), F.modelo(), F.serie(), F.condicion(S.here.c), F.oper(S.here.o), {k:'ub',l:'Dónde se encontró',v:ubic(S.here),full:true}, {k:'nota',l:'Nota',full:true,ph:'Color, medidas, etiqueta antigua…'}],
     submit:async v=>{ if(!Number.isSafeInteger(v.cant)||v.cant<1)return {error:'Indica una cantidad entera mayor que cero.'};const t=S.data.tomas[S.tomaSel]; await patch('tomas',S.tomaSel,{sobrantes:[...(t.sobrantes||[]),{d:v.d,cant:v.cant||1,marca:v.marca,modelo:v.modelo,serie:v.serie,c:v.condicion,o:v.oper,ub:v.ub,amb:S.here.amb||'',cuad:S.here.cuad||'',pt:S.here.pt||null,nota:v.nota,u:S.me||null,t:nowIso()}]}); S._pendSob=''; const i=$('#scan'); if(i) i.value=''; S.scanQ=''; renderScanRes(); toast('Sobrante registrado.'); } }); },
   tSobDel(i){ const t=S.data.tomas[S.tomaSel]; const s=[...(t.sobrantes||[])]; s.splice(Number(i),1); patch('tomas',S.tomaSel,{sobrantes:s}); },
@@ -1480,29 +1570,33 @@ document.addEventListener('click',e=>{ const pk=e.target.closest && e.target.clo
 document.addEventListener('change',e=>{ if(e.target.id==='tpl-sel'){ S.tPl=e.target.value; render(); } if(e.target.id==='t-grp'){ S.tGroup=e.target.value; S.tOpen={}; S.tglim=40; render(); } if(e.target.id==='t-cr'){ S.tCR=e.target.value; S.tOpen={}; S.tlim=PAGE; render(); } });
 
 async function borrarEjemplos(){ const tasks=[]; for(const col of ['planos','equipos','sistemas','mantenimientos','tomas','bienes']) for(const [id,d] of Object.entries(S.data[col]||{})) if(d.ejemplo) tasks.push(()=>del(col,id)); for(const [path,o] of Object.entries(S.data)) if(/^tomas\/ej-/.test(path)) for(const id of Object.keys(o)) tasks.push(()=>del(path,id)); await runMany(tasks,3); closeBien(); S.tomaSel=null; }
-function marcar(bid,esperar=false){
+async function marcar(bid,esperar=false){
+  exigirEscritura();
   const t=S.data.tomas[S.tomaSel]; if(!t||t.estado!=='abierta') return;
   const b=S.data.bienes[bid]||{}; const H=S.here;
   const d={r:'Encontrado', cant:1, sede:H.sede||b.sede||'', piso:H.piso||b.piso||'', ambiente:H.ambiente||b.ambiente||'', cu:H.cu||b.responsable||'', c:H.c, o:H.o, amb:H.amb||'', cuad:H.cuad||'', pt:H.pt||null, u:S.me||null, t:nowIso()};
-  const escritura=put(`tomas/${S.tomaSel}/conteos`, bid, d);
-  return esperar?escritura.then(()=>d):d;
+  return guardarConteoUI(S.tomaSel,bid,d);
 }
 const EV_CIERRE=['No localizado en inventario','Verificado en inventario','Encontrado con diferencias (por conciliar)'];
 const CAMPOS_CIERRE=['amb','cuad','pt','sede','piso','ambiente','ubicacion','responsable','condicion','oper','inv','act'];
-async function cerrarToma(t){
+async function cerrarToma(t,{avisados=[]}={}){
+  exigirAdmin();
+  if(FS){const snap=await FS.collection(`tomas/${t.id}/conteos`).get({source:'server'});const actuales={};for(const doc of snap.docs){const c=limpioConteo(doc.data());if(c)actuales[doc.id]=c;}S.data[`tomas/${t.id}/conteos`]=actuales;}
+  const otros=usuariosRecientes(t.id).filter(x=>x.u!==S.me&&!avisados.includes(x.u));
+  if(otros.length)return {error:'Hay otras personas contando: '+otros.map(x=>who(x.u)).join(', ')+'. Cancela y vuelve a abrir el cierre para confirmar el aviso.'};
   if(S.cierreRun||S.data.tomas[t.id]?.estado!=='abierta')return {error:'La toma no está disponible para cerrar.'};
   if(fichasCierreInterrumpido(t).length)return {error:'Primero revierte el cierre interrumpido antes de intentar cerrar de nuevo.'};
   const C=conteos(t.id); const ids=[...new Set([...(t.esperados||[]), ...Object.keys(C).filter(k=>!(t.esperados||[]).includes(k))])];
   const f=today(); const res={enc:0,conc:0,nol:0,sob:(t.sobrantes||[]).length,tot:(t.esperados||[]).length};
   const snap=b=>{ const o={}; CAMPOS_CIERRE.forEach(k=>o[k]=b[k]===undefined?null:b[k]); return o; };
-  const evc=(tipo,det,b)=>({...ev(tipo,det),toma:t.id,prev:snap(b)});
+  const evc=(tipo,det,b,c)=>({...ev(tipo,det+(c?.u?' · Conteo de '+nameOf(c.u):'')),toma:t.id,prev:snap(b)});
   const hechos=[];
   const tasks=ids.filter(bid=>S.data.bienes[bid]).map(bid=>{ const c=C[bid]; const b=S.data.bienes[bid]; const r=c?.r||'No localizado';
-    if(r==='No localizado'){ if((t.esperados||[]).includes(bid)) res.nol++; return async()=>{ await bienPatch(bid,{inv:{f,toma:t.nombre,tomaId:t.id,r}}, evc('No localizado en inventario', `${t.nombre}${c?.obs?'. '+c.obs:''}. Verificar su paradero o solicitar la baja.`,b)); hechos.push(bid); }; }
+    if(r==='No localizado'){ if((t.esperados||[]).includes(bid)) res.nol++; return async()=>{ await bienPatch(bid,{inv:{f,toma:t.nombre,tomaId:t.id,r}}, evc('No localizado en inventario', `${t.nombre}${c?.obs?'. '+c.obs:''}. Verificar su paradero o solicitar la baja.`,b,c)); hechos.push(bid); }; }
     if(r==='Encontrado') res.enc++; else res.conc++;
     const nf={amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion,oper:c.o||b.oper,inv:{f,toma:t.nombre,tomaId:t.id,r}};
     const ch=[]; if(nf.ubicacion!==ubic(b)) ch.push(`ubicación: ${ubic(b)||'por confirmar'} → ${nf.ubicacion||'—'}`); if(nf.responsable!==(b.responsable||'')) ch.push(`custodio: ${b.responsable||'—'} → ${nf.responsable}`); if(nf.condicion!==b.condicion) ch.push(`conservación: ${b.condicion||'—'} → ${nf.condicion}`); if(nf.oper!==b.oper) ch.push(`operatividad: ${b.oper||'—'} → ${nf.oper}`);
-    return async()=>{ await bienPatch(bid,nf, evc(r==='Encontrado'?'Verificado en inventario':'Encontrado con diferencias (por conciliar)', `${t.nombre}${ch.length?': '+ch.join('; '):''}${c.obs?'. '+c.obs:''}`,b)); hechos.push(bid); }; });
+    return async()=>{ await bienPatch(bid,nf, evc(r==='Encontrado'?'Verificado en inventario':'Encontrado con diferencias (por conciliar)', `${t.nombre}${ch.length?': '+ch.join('; '):''}${c.obs?'. '+c.obs:''}`,b,c)); hechos.push(bid); }; });
   S.cierreRun=true; S.abortar=false; const cb=$('#modal [data-act="closeModal"].btn:not(.m-x)'); if(cb){ cb.textContent='Cancelar cierre'; }
   let r; try{ r=await runMany(tasks, 4, (d,n)=>modalProgress(`Actualizando fichas: ${d} de ${n}… (puedes cancelar: lo hecho se revierte)`)); } finally { S.cierreRun=false; }
   if(S.abortar){ S.abortar=false; modalProgress(`Revirtiendo ${hechos.length} fichas…`); const rv=await revertirFichas(t,hechos,(d,n)=>modalProgress(`Revirtiendo fichas: ${d} de ${n}…`)); toast(`Cierre cancelado. Se revirtieron ${rv.done-rv.fail} fichas${rv.fail?`; ${rv.fail} quedaron pendientes: usa «Revertir» en la toma`:''}. La toma sigue abierta.`); return; }
@@ -1513,6 +1607,7 @@ async function cerrarToma(t){
 /* fichas tocadas por un cierre de esta toma que no llegó a completarse */
 function fichasCierreInterrumpido(t){ if(!t||t.estado!=='abierta') return []; return Object.entries(S.data.bienes||{}).filter(([id,b])=>b.inv&&(b.inv.tomaId?b.inv.tomaId===t.id:b.inv.toma===t.nombre)&&(b.hist||[]).some(e=>EV_CIERRE.includes(e.tipo)&&(e.toma?e.toma===t.id:String(e.det||'').startsWith(t.nombre)))).map(([id])=>id); }
 async function revertirFichas(t,ids,onProg){
+  exigirAdmin();
   const tasks=ids.map(id=>async()=>{ const b=S.data.bienes[id]; if(!b) return; const H=[...(b.hist||[])]; let k=-1; for(let i=H.length-1;i>=0;i--){ const e=H[i]; if(EV_CIERRE.includes(e.tipo)&&(e.toma?e.toma===t.id:String(e.det||'').startsWith(t.nombre))){ k=i; break; } } if(k<0) return;
     const e=H[k]; H.splice(k,1); let fields;
     if(e.prev){ fields={...e.prev}; }
@@ -1689,6 +1784,7 @@ function analizarIdentidadV3(sheets){
   return {errores,filas,cambios,prioridades,sinEtiqueta:Object.keys(B).filter(id=>!adms.has(id)&&B[id].idEtq==null)};
 }
 async function ejecutarIdentidadV3(r,archivo){
+  exigirAdmin();
   if(r.errores.length) throw new Error('La V3 contiene errores; no se aplicó la carga.');
   // Revalidar el estado más reciente antes de cualquier escritura.
   for(const x of r.filas){ const b=S.data.bienes[x.id]; if(!b||codigoTomaKey(b.codCont)!==codigoTomaKey(x.codigo||b.codCont)) throw new Error('El registro cambió; vuelve a cargar la V3.'); if(b.idEtq!=null&&Number(b.idEtq)!==x.d.idEtq) throw new Error('El ID cambió; vuelve a revisar la V3.'); }
@@ -1727,6 +1823,7 @@ function similaresActivo(key,grupos){
   return grupos.filter(g=>g.key!==key&&nums(g.key)===nums(key)&&(compact(g.key)===compact(key)||g.key.includes(key)||key.includes(g.key))).slice(0,6).map(g=>g.key);
 }
 function revisarActivo(){
+  exigirAdmin();
   const grupos=variantesActivo(); const aliases=S.data.config.activoAlias?.alias||{}; const q=activoBase(S.activoQ||''); const lista=grupos.filter(g=>!q||g.key.includes(q)||activoKey(g.key).includes(q));
   const filas=lista.slice(0,80).map(g=>`<tr><td class="w" data-l="ACTIVO"><b>${esc(g.key)}</b><div class="small muted">${g.total} bienes</div></td><td class="w" data-l="Variantes">${[...g.variantes].map(([n,c])=>`<div>${esc(JSON.stringify(n))} (${c})</div>`).join('')}</td><td class="w" data-l="Alias">${esc(aliases[g.key]||'Sin alias')}<div class="small muted">${esc(similaresActivo(g.key,grupos).join(' · '))}</div></td><td><button class="btn" data-act="activoEditar" data-id="${esc(g.key)}">Revisar</button></td></tr>`).join('');
   const m=$('#modal');m.innerHTML=`<div class="m-h"><h2>Revisar descripciones</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p>Se unen tildes, mayúsculas y espacios automáticamente. Los alias requieren tu decisión; revisa las medidas antes de unir. Las descripciones originales se conservan.</p><label for="activo-q">Buscar ACTIVO</label><input class="inp" id="activo-q" value="${esc(S.activoQ||'')}" placeholder="Ej.: SILLA"><p class="small muted">${lista.length} descripciones · mostrando hasta 80. EQUIPOS-0076: se conserva «MICROFONO INALAMBRICO VOCAL»; en la V3 original figura «#N/A».</p><div class="tbl-wrap"><table class="stk"><thead><tr><th>ACTIVO</th><th>Variantes originales</th><th>Alias / parecidas para revisar</th><th></th></tr></thead><tbody>${filas||'<tr><td>Sin coincidencias.</td></tr>'}</tbody></table></div></div><div class="m-f"><button class="btn primary" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();
@@ -1743,7 +1840,7 @@ Object.assign(ACT,{
     }});
   }
 });
-let activoQT;document.addEventListener('input',e=>{if(e.target.id!=='activo-q')return;S.activoQ=e.target.value;const pos=e.target.selectionStart;clearTimeout(activoQT);activoQT=setTimeout(()=>{revisarActivo();const i=$('#activo-q');i.focus();i.setSelectionRange(pos,pos);},180);});
+let activoQT;document.addEventListener('input',e=>{if(e.target.id!=='activo-q')return;S.activoQ=e.target.value;const pos=e.target.selectionStart;clearTimeout(activoQT);activoQT=setTimeout(()=>{if(!S.admin||S.readonly)return;revisarActivo();const i=$('#activo-q');i.focus();i.setSelectionRange(pos,pos);},180);});
 
 /* ---------- R3: enriquecimiento repetible desde Formato 7.1 ---------- */
 const CONTROL71={
@@ -1782,6 +1879,7 @@ function analizarFormato71(sheets){
  return {errores,cambios,duplicados,controles,total,periodo,ruc,razon,hallazgos};
 }
 async function ejecutarFormato71(r,archivo){
+  exigirAdmin();
  if(r.errores.length)throw new Error('Corrige los errores antes de aplicar.');
  for(const x of r.cambios)if(codigoTomaKey(S.data.bienes[x.id]?.codCont)!==x.cod)throw new Error('El registro cambió; vuelve a analizar el archivo.');
  const prev=r.cambios.map(x=>({id:x.id,prev:Object.fromEntries(R3_FIELDS.map(k=>[k,S.data.bienes[x.id][k]??null])),nuevo:x.d}));
@@ -1839,26 +1937,22 @@ function analizarRangos(txt){const M=indiceEtiqueta(),nums=new Set();for(const t
 }
 function registrarIDsModal(txt='',estado=S.here.c,oper=S.here.o){const t=S.data.tomas[S.tomaSel];if(!t||t.estado!=='abierta')return;
  openForm({title:'Registrar IDs',note:`Contando en <b>${esc(hereTxt())}</b>. Confirma los IDs contra las etiquetas físicas.`,fields:[{k:'rangos',l:'IDs o rangos',v:txt,req:true,full:true,ph:'10-29, 35, 40-42'},F.condicion(estado),F.oper(oper)],ok:'Ver vista previa',submit:async v=>{
-  if(!S.here.piso&&!S.here.ambiente)return {error:'Elige primero la ubicación en «Contando en».'};let r;try{r=analizarRangos(v.rangos);}catch(e){return {error:e.message};}if(!r.bienes.length)return {error:'No hay IDs reconocidos en este rango.'};const tid=S.tomaSel,H=structuredClone(S.here),C=conteos(tid);const existentes=r.bienes.filter(b=>C[b.id]),fuera=r.bienes.filter(b=>!(t.esperados||[]).includes(b.id));
+  if(!S.here.piso&&!S.here.ambiente)return {error:'Elige primero la ubicación en «Contando en».'};let r;try{r=analizarRangos(v.rangos);}catch(e){return {error:e.message};}if(!r.bienes.length)return {error:'No hay IDs reconocidos en este rango.'};const tid=S.tomaSel,H=structuredClone(S.here),C=structuredClone(conteos(tid));const existentes=r.bienes.filter(b=>C[b.id]),fuera=r.bienes.filter(b=>!(t.esperados||[]).includes(b.id));
   openForm({title:'Confirmar IDs de campo',note:`<b>${r.bienes.length}</b> bienes · IDs ${esc(rangoIds(r.bienes.map(b=>Number(b.idEtq))))}<br>Ubicación: <b>${esc(hereTxt())}</b><ul>${[...r.grupos].map(([k,n])=>`<li>${esc(k)}: ${n}</li>`).join('')}</ul>${r.grupos.size>1?'<p class="err">El rango mezcla ACTIVO distintos. Comprueba cada etiqueta antes de continuar.</p>':''}${existentes.length?`<p>${existentes.length} IDs ya registrados: ${esc(rangoIds(existentes.map(b=>Number(b.idEtq))))}. Se conservan salvo que elijas reemplazarlos.</p>`:''}${r.inexistentes.length?`<p class="err">IDs inexistentes (no se registran): ${esc(rangoIds(r.inexistentes))}</p>`:''}${fuera.length?`<p>${fuera.length} bienes fuera del alcance de la toma.</p>`:''}`,fields:[...(existentes.length?[{k:'reemplazar',l:'Conteos existentes',t:'select',opts:[['no','Conservarlos'],['si','Reemplazarlos (guardar estado anterior)']],full:true}]:[]),{k:'conf',l:'Escribe REGISTRAR para confirmar los IDs',req:true,full:true}],ok:'Registrar IDs',submit:async w=>{
    if(w.conf!=='REGISTRAR')return {error:'Escribe REGISTRAR para confirmar.'};if(S.data.tomas[tid]?.estado!=='abierta')return {error:'La toma ya no está abierta.'};
-   const actual=conteos(tid),L=r.bienes.filter(b=>w.reemplazar==='si'||!actual[b.id]);if(!L.length){toast('Todos los IDs ya estaban registrados.');return;}
+   const actual=C,L=r.bienes.filter(b=>w.reemplazar==='si'||!actual[b.id]);if(!L.length){toast('Todos los IDs ya estaban registrados.');return;}
    const nuevos=L.map(b=>({id:b.id,d:{r:'Encontrado',cant:1,sede:H.sede||'',piso:H.piso||'',ambiente:H.ambiente||'',amb:H.amb||'',cuad:H.cuad||'',pt:H.pt||null,cu:H.cu||'',c:v.condicion,o:v.oper,u:S.me||null,t:nowIso()}}));
    const key='toma-r5-'+uid();await put('config',key,{tipo:'Registro por IDs',toma:tid,fecha:nowIso(),prev:nuevos.map(x=>({id:x.id,prev:actual[x.id]||null,nuevo:x.d})),estado:'en curso'});
-   const res=await runMany(nuevos.map(x=>()=>put(`tomas/${tid}/conteos`,x.id,x.d)),4,(d,n)=>modalProgress(`Registrando ${d} de ${n} IDs…`));await patch('config',key,{estado:res.fail?'incompleta':'terminada',resultado:res});if(res.fail)return {error:`${res.fail} IDs fallaron. Conservamos la copia anterior; revisa y reintenta.`};toast(`${res.done} bienes encontrados.`);render();
+   const res=await guardarGrupoConteos(tid,nuevos.map(x=>({...x,anterior:w.reemplazar==='si'?actual[x.id]||null:null})),(d,n)=>modalProgress(`Registrando ${d} de ${n} IDs…`));await patch('config',key,{estado:res.fail?'incompleta':'terminada',resultado:{done:res.done,fail:res.fail,guardados:res.guardados,omitidos:res.omitidos}});if(conflictosGrupo(res))return {keep:true};if(res.fail)return {error:`${res.fail} IDs fallaron. Conservamos la copia anterior; revisa y reintenta.`};toast(`${res.guardados} bienes encontrados.`);render();
   }});return {keep:true};
  }});
 }
 function mismoLugar(a,b){return ['sede','piso','ambiente','amb','cuad'].every(k=>String(a[k]||'')===String(b[k]||''));}
-async function scan(code){const crudo=String(code||'').trim();if(!crudo)return false;const t=S.data.tomas[S.tomaSel];if(!t||t.estado!=='abierta')return false;
+async function scan(code){exigirEscritura();const crudo=String(code||'').trim();if(!crudo)return false;const t=S.data.tomas[S.tomaSel];if(!t||t.estado!=='abierta')return false;
  const limpio=crudo.replace(/\s+/g,'');const B=bienes();let b;if(/^\d+$/.test(limpio)){const n=Number(limpio);if(Number.isSafeInteger(n))b=indiceEtiqueta().get(n);}else{const k=codigoTomaKey(crudo);const encontrados=B.filter(x=>codigoTomaKey(x.codigo)===k||codigoTomaKey(x.codCont)===k);if(encontrados.length>1){toast('Código contable duplicado. Usa el ID de etiqueta o código ADM.');return false;}b=encontrados[0];}
  if(!b){S._pendSob=crudo;openForm({title:'Código desconocido',note:`Lectura: <b>${esc(crudo)}</b>. No corresponde a un bien del registro.`,fields:[],ok:'Registrar sobrante',submit:async()=>{setTimeout(()=>ACT.tSobrante(),0);}});return false;}
  if(!S.here.piso&&!S.here.ambiente){toast('Elige primero la ubicación en «Contando en».');return false;}
- const tid=S.tomaSel,c=conteos(tid)[b.id];if(c&&c.r!=='No localizado'){
-  if(mismoLugar(c,S.here)){toast(`ID ${b.idEtq||b.codigo}: ya registrado aquí.`);return true;}
-  const H=structuredClone(S.here);openForm({title:'Bien registrado en otra ubicación',note:`ID ${esc(b.idEtq||b.codigo)} · ${esc(b.nombre)}<br>Antes: ${esc(ubic(c))}<br>Ahora: ${esc(hereTxt())}`,fields:[],ok:'Mover a esta ubicación',submit:async()=>{if(S.data.tomas[tid]?.estado!=='abierta')return {error:'La toma ya no está abierta.'};await put(`tomas/${tid}/conteos`,b.id,{r:'Encontrado',cant:1,sede:H.sede||'',piso:H.piso||'',ambiente:H.ambiente||'',amb:H.amb||'',cuad:H.cuad||'',pt:H.pt||null,cu:H.cu||'',c:H.c,o:H.o,u:S.me||null,t:nowIso(),prev:c});toast(`ID ${b.idEtq||b.codigo}: ubicación actualizada.`);}});return false;
- }
- await marcar(b.id,true);toast(`ID ${b.idEtq||b.codigo}: ${b.nombre}, encontrado.`);return true;
+ const d=await marcar(b.id,true);if(!d)return false;toast(`ID ${b.idEtq||b.codigo}: ${b.nombre}, encontrado.`);return true;
 }
 document.addEventListener('change',e=>{if(e.target.id==='b-orden'){S.bOrden=e.target.value;S.lim=PAGE;render();}if(e.target.id==='t-prioridad'){S.tPrioridad=e.target.value;render();}if(e.target.id==='t-activo'){S.tActivoFiltro=e.target.value;render();}});
 Object.assign(ACT,{tRegistrarIDs(){if(!S.here.piso&&!S.here.ambiente){toast('Elige primero «Dónde estoy».');S.hereOpen=true;render();return;}registrarIDsModal();},
@@ -2038,7 +2132,7 @@ function actualizarV3(r){r.solapado=false;const reg=new Map();r.avisos=new Set()
  r.reg=reg;const C=conteos(r.toma);r.yaReg=[...reg.keys()].filter(id=>C[id]).length;r.enc=[...reg.values()].filter(x=>x.d.r==='Encontrado').length;r.nol=reg.size-r.enc;r.pend=[...r.all.keys()].filter(id=>!reg.has(id)).length;
  r.porActivo=new Map();for(const id of r.all.keys()){const k=activoKey(S.data.bienes[id].nombre);const g=r.porActivo.get(k)||{total:0,enc:0,nol:0,pend:0};g.total++;const c=reg.get(id);if(!c)g.pend++;else if(c.d.r==='Encontrado')g.enc++;else g.nol++;r.porActivo.set(k,g);}return r;
 }
-function previewV3(){const {r,file}=S._imp;actualizarV3(r);const m=$('#modal');m.classList.add('wide');const prevOver=$('#imp-over')?.checked;
+function previewV3(){S._imp.anteriores??=structuredClone(conteos(S._imp.r.toma));const {r,file}=S._imp;actualizarV3(r);const m=$('#modal');m.classList.add('wide');const prevOver=$('#imp-over')?.checked;
  m.innerHTML=`<form data-form="impok"><div class="m-h"><h2>Vista previa de la V3</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p>${esc(file)} · ${r.enc} encontrados · ${r.nol} no localizados · ${r.pend} pendientes en este archivo.</p><p>Los registros existentes se conservan salvo que marques reemplazarlos. Las filas sin datos no crean conteos.</p>
  ${r.cantidades.map(f=>`<div class="m-note"><b>Fila ${f.ri}: CANTIDAD ${f.n}</b> para ${esc(activoKey(S.data.bienes[f.id].nombre))}.<br>${f.apto?`Se pueden registrar los IDs ${esc([f.id,...f.siguientes].map(id=>S.data.bienes[id].idEtq).join(', '))}.`:'No hay suficientes IDs posteriores del mismo ACTIVO sin datos.'}<label>Qué aplicar<select class="inp" data-v3-cantidad="${f.ri}"><option value="omitir" ${!r.choices[f.ri]||r.choices[f.ri]==='omitir'?'selected':''}>Omitir esta cantidad hasta revisarla</option><option value="solo" ${r.choices[f.ri]==='solo'?'selected':''}>Registrar solo esta fila como 1 bien</option>${f.apto?`<option value="expandir" ${r.choices[f.ri]==='expandir'?'selected':''}>Aplicar a estos ${f.n} IDs del mismo ACTIVO</option>`:''}</select></label></div>`).join('')}
  ${r.yaReg?`<label class="chk"><input type="checkbox" id="imp-over" ${prevOver?'checked':''}> Reemplazar ${r.yaReg} conteos existentes (se guardará copia anterior)</label>`:''}
@@ -2048,14 +2142,14 @@ function previewV3(){const {r,file}=S._imp;actualizarV3(r);const m=$('#modal');m
  <div class="tbl-wrap"><table class="stk"><thead><tr><th>ACTIVO</th><th>Registrados</th><th>Encontrados</th><th>No localizados</th><th>Pendientes</th></tr></thead><tbody>${[...r.porActivo].map(([k,g])=>`<tr><td class="w" data-l="ACTIVO">${esc(k)}</td><td data-l="Registrados">${g.total}</td><td data-l="Encontrados">${g.enc}</td><td data-l="No localizados">${g.nol}</td><td data-l="Pendientes">${g.pend}</td></tr>`).join('')}</tbody></table></div>
  <label for="v3-conf">Escribe IMPORTAR para aplicar los conteos de esta vista previa</label><input class="inp" id="v3-conf" autocomplete="off"><p class="err" id="ferr" hidden></p><div id="mextra"></div></div><div class="m-f"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn primary" id="mok" ${r.errores.length||r.solapado?'disabled':''}>Importar</button></div></form>`;if(!m.open)m.showModal();
 }
-async function ejecutarV3(){const {r,file}=S._imp;const err=msg=>{const e=$('#ferr');e.textContent=msg;e.hidden=false;};if(S.busy)return;
+async function ejecutarV3(){exigirEscritura();const {r,file}=S._imp;const err=msg=>{const e=$('#ferr');e.textContent=msg;e.hidden=false;};if(S.busy)return;
  if(r.errores.length||r.solapado)return err('Corrige los errores y las expansiones solapadas antes de importar.');if($('#v3-conf').value!=='IMPORTAR')return err('Escribe IMPORTAR para confirmar.');
- const t=S.data.tomas[r.toma];if(!t||t.estado!=='abierta')return err('La toma ya no está abierta.');const over=$('#imp-over')?.checked,C=conteos(r.toma);
- const cambios=[...r.reg].filter(([id,x])=>(over||!C[id])&&JSON.stringify(C[id])!==JSON.stringify(x.d));
+ const t=S.data.tomas[r.toma];if(!t||t.estado!=='abierta')return err('La toma ya no está abierta.');const over=$('#imp-over')?.checked,C=S._imp.anteriores||{};
+ const cambios=[...r.reg].filter(([id,x])=>(over||!C[id])&&firmaDatos(C[id])!==firmaDatos(x.d));
  if(!cambios.length){$('#modal').close();S._imp=null;toast('No hay conteos nuevos para aplicar.');return;}
  const backup='toma-r4-'+uid();S.busy=true;$('#mok').disabled=true;
  try{await put('config',backup,{tipo:'Importación V3',toma:r.toma,archivo:file,fecha:nowIso(),estado:'en curso',prev:cambios.map(([id,x])=>({id,prev:C[id]||null,nuevo:x.d}))});
- const resultado=await runMany(cambios.map(([id,x])=>()=>put(`tomas/${r.toma}/conteos`,id,x.d)),4,(d,n)=>modalProgress(`Guardando conteos: ${d} de ${n}…`));await patch('config',backup,{estado:resultado.fail?'incompleta':'terminada',resultado});
+ const resultado=await guardarGrupoConteos(r.toma,cambios.map(([id,x])=>({id,d:x.d,anterior:over?C[id]||null:null})),(d,n)=>modalProgress(`Guardando conteos: ${d} de ${n}…`));await patch('config',backup,{estado:resultado.fail?'incompleta':'terminada',resultado:{done:resultado.done,fail:resultado.fail,guardados:resultado.guardados,omitidos:resultado.omitidos}});if(conflictosGrupo(resultado)){S._imp=null;return;}
  if(resultado.fail){err(`${resultado.fail} conteos fallaron. Reimporta el archivo para completar; hay copia del estado anterior.`);return;}
  $('#modal').close();S._imp=null;toast(`${resultado.done} conteos guardados desde la V3.`);render();}catch(e){err('No se pudo completar la carga. Se conserva el respaldo anterior; vuelve a revisar el archivo.');}finally{S.busy=false;if($('#mok'))$('#mok').disabled=false;}
 }
@@ -2104,9 +2198,9 @@ Object.assign(ACT,{
       fields:[{k:'f',l:'Archivo Excel (.xlsx) o CSV',t:'file',accept:'.xlsx,.xlsm,.csv',req:true,full:true}],
       submit:async v=>{ const file=v.f; if(!file) return {error:'Elige el archivo.'}; let r; try{ r=await analizarImport(file,t); }catch(e){ return {error:'No se pudo leer el archivo. Guárdalo como Excel (.xlsx) e inténtalo de nuevo.'}; }
         if(!r.hojas.length) return {error:'No encontré encabezados de toma (FECHA DE INVENTARIO, EDIFICIO, PISO, UBICACIÓN, CANTIDAD, ESTADO). Revisa que la hoja tenga esa fila de títulos.'};
-        S._imp={r,file:file.name}; setTimeout(()=>impPreview(),30); return {keep:true}; } }); },
+        S._imp={r,file:file.name,anteriores:structuredClone(conteos(t.id))}; setTimeout(()=>impPreview(),30); return {keep:true}; } }); },
 });
-function impPreview(){ if(S._imp?.r.tipo==='v3')return previewV3(); const {r,file}=S._imp; const m=$('#modal'); const li=(a,f)=>a.slice(0,8).map(f).join('')+(a.length>8?`<li class="muted">… y ${a.length-8} más</li>`:'');
+function impPreview(){ S._imp.anteriores??=structuredClone(conteos(S._imp.r.toma||S.tomaSel));if(S._imp?.r.tipo==='v3')return previewV3(); const {r,file}=S._imp; const m=$('#modal'); const li=(a,f)=>a.slice(0,8).map(f).join('')+(a.length>8?`<li class="muted">… y ${a.length-8} más</li>`:'');
   const gr=r.grupos.length?`<li><b>${r.grupos.length}</b> filas de grupo ▸ aplicadas a <b>${r.grupos.reduce((a,g)=>a+g.aplic,0)}</b> códigos${r.grupos.some(g=>g.exceso)?` (en ${r.grupos.filter(g=>g.exceso).length} grupos se anotó más cantidad que códigos por verificar: la diferencia debería ir como sobrante)`:''}</li>`:'';
   m.classList.add('wide'); m.innerHTML=`<form method="dialog" data-form="impok"><div class="m-h"><h2>Resumen de la importación</h2><button type="button" class="btn ghost m-x" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="grid-template-columns:1fr">
     <div class="small muted">${esc(file)} · hojas leídas: ${esc(r.hojas.join(', '))}</div>
@@ -2117,14 +2211,14 @@ function impPreview(){ if(S._imp?.r.tipo==='v3')return previewV3(); const {r,fil
     <p class="err" id="ferr" hidden></p><div id="mextra" class="m-extra"></div></div>
     <div class="m-f"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button type="submit" class="btn primary" id="mok">Importar</button></div></form>`;
   if(!m.open) m.showModal(); }
-async function impEjecutar(){ if(S._imp?.r.tipo==='v3')return ejecutarV3(); const {r,file}=S._imp; const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const C=conteos(t.id); const over=$('#imp-over')?.checked; const addSob=$('#imp-sob')?.checked;
+async function impEjecutar(){ exigirEscritura();if(S._imp?.r.tipo==='v3')return ejecutarV3(); const {r,file}=S._imp; const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const C=S._imp.anteriores||{}; const over=$('#imp-over')?.checked; const addSob=$('#imp-sob')?.checked;
   const ok=$('#mok'); if(ok) ok.disabled=true;
-  const tasks=[...r.reg.entries()].filter(([id])=>over||!C[id]).map(([id,x])=>()=>put(`tomas/${t.id}/conteos`, id, x.d));
-  const res=await runMany(tasks,4,(d,n)=>modalProgress(`Guardando conteos: ${d} de ${n}…`));
+  const items=[...r.reg.entries()].filter(([id])=>over||!C[id]).map(([id,x])=>({id,d:x.d,anterior:over?C[id]||null:null}));
+  const res=await guardarGrupoConteos(t.id,items,(d,n)=>modalProgress(`Guardando conteos: ${d} de ${n}…`));
   const nuevos=[...r.sob.map(f=>({d:f.d,cant:Math.max(1,Math.round(Number(f.cant)||1)),marca:f.marca,modelo:f.modelo,serie:f.serie})), ...(addSob?r.desconocidos.map(f=>({d:f.d,cant:Math.max(1,Math.round(Number(f.cant)||1)),nota:`Código ${f.code} no está en el registro`})):[])]
     .map((o,i)=>{ const f=i<r.sob.length?r.sob[i]:r.desconocidos[i-r.sob.length]; const u=ubicar(f); const e=estImp(f.estado); return {...o,c:e.c||'Por evaluar',o:operDe(f.oper)||'No probado',ub:[edifCorto(u.sede)||f.edif,u.piso&&(/^\d/.test(u.piso)?'Piso '+u.piso:u.piso),u.cuad,u.ambiente].filter(Boolean).join(' · '),amb:u.amb,cuad:u.cuad,pt:u.pt,nota:[o.nota,f.obs].filter(Boolean).join(' · '),u:S.me||null,t:fechaIso(f.fecha)||nowIso(),imp:file}; });
   if(nuevos.length){ const tt=S.data.tomas[t.id]; await patch('tomas',t.id,{sobrantes:[...(tt.sobrantes||[]),...nuevos]}); }
-  $('#modal').close(); S._imp=null; toast(`Importado: ${res.done-res.fail} conteos${nuevos.length?` y ${nuevos.length} sobrantes`:''}${res.fail?` · ${res.fail} con error, vuelve a importar el archivo`:''}.`); }
+  S._imp=null;if(conflictosGrupo(res))return;$('#modal').close(); toast(`Importado: ${res.done-res.fail} conteos${nuevos.length?` y ${nuevos.length} sobrantes`:''}${res.fail?` · ${res.fail} con error, vuelve a importar el archivo`:''}.`); }
 
 /* Alta de una unidad sobrante: secuencia y datos se guardan juntos en Firebase. */
 async function altaUnidadSobrante(tid,index,v){
@@ -2178,7 +2272,7 @@ function tablasNormalizadas(datos=S.data,usuarios=S.usuarios){
  const entries=o=>Object.entries(o||{}).sort(([a],[b])=>a.localeCompare(b,'es',{numeric:true}));
  const txt=v=>v==null?'':String(v),num=v=>v==null||v===''?'':Number.isFinite(Number(v))?Number(v):txt(v);
  const cash=v=>({v:num(v),s:'m'}),list=v=>Array.isArray(v)?v.join('\n'):txt(v);
- const nombre=u=>!u?'':U[u]?.nombre||S.names[u]||(u===S.me?S.myName:'')||'Usuario anterior o sin nombre disponible';
+ const nombre=u=>!u?'':U[u]?.nombre||S.names[u]||(u===S.me?S.myName:'')||U[u]?.email||'Usuario anterior o sin nombre disponible';
  const add=(name,heads,rows)=>{sheets.push({name,rows:[heads.map(v=>({v,s:'h'})),...rows],cols:heads.map(h=>/Descripcion|Observacion|Detalle|Componentes/.test(h)?55:24),filter:`A1:${XL.col(heads.length-1)}${rows.length+1}`,freeze:1,sel:name==='Bienes'});meta.push({name,heads,n:rows.length});};
  const B=entries(D.bienes),T=entries(D.tomas),C=Object.entries(D).filter(([p])=>/^tomas\/[^/]+\/conteos$/.test(p));
  const rangos=new Set();for(const [id,l]of entries(cfg))if(id.startsWith('toma-r5-'))for(const x of l.prev||[])rangos.add(`${l.toma}/${x.id}/${x.nuevo?.t||''}`);
@@ -2452,7 +2546,7 @@ document.addEventListener('click', e=>{
   const el=e.target.closest('[data-act]'); if(!el) return;
   const a=el.dataset.act; if(!ACT[a]) return;
   if(S.readonly && !RO_OK.includes(a)) { toast('Tienes acceso de solo lectura.'); return; }
-  e.preventDefault(); ACT[a](el.dataset.id ?? el.dataset.i, el);
+  e.preventDefault();try{const r=ACT[a](el.dataset.id ?? el.dataset.i, el);if(r?.catch)r.catch(e=>toast(e.message));}catch(e){toast(e.message);}
 });
 document.addEventListener('keydown', e=>{
   if(e.key==='Enter' && e.target.matches('tr[data-act]')){ e.preventDefault(); e.target.click(); }
@@ -2462,9 +2556,9 @@ $('#modal').addEventListener('cancel', e=>{ if(S.cierreRun){ e.preventDefault();
 $('#scrim').addEventListener('click', closeBien);
 document.addEventListener('submit', async e=>{
   const f=e.target; if(f.dataset.form==='modal'){ e.preventDefault(); submitModal(f); }
-  if(f.dataset.form==='impok'){ e.preventDefault(); impEjecutar(); return; }
+  if(f.dataset.form==='impok'){ e.preventDefault(); impEjecutar().catch(e=>toast(e.message)); return; }
   if(f.dataset.form==='ambnom'){ e.preventDefault(); ambNombresGuardar(); return; }
-  if(f.dataset.form==='scan'){ e.preventDefault(); const i=$('#scan'); if(await scan(i.value)){ i.value=''; S.scanQ=''; renderScanRes(); } }
+  if(f.dataset.form==='scan'){ e.preventDefault(); const i=$('#scan'); try{if(await scan(i.value)){ i.value=''; S.scanQ=''; renderScanRes(); }}catch(e){toast(e.message);} }
 });
 let qT;
 document.addEventListener('input', e=>{
@@ -2597,21 +2691,22 @@ async function subscribeFS(path){
 function local(path,fn){ const o={...(S.data[path]||{})}; fn(o); S.data[path]=o; renderPronto(); }
 
 /* Usuarios (administrador) */
-function usuariosModal(){ const m=$('#modal'); m.classList.add('wide'); const L=Object.entries(S.usuarios).sort((a,b)=>(a[1].activo===b[1].activo?0:a[1].activo?1:-1)||String(a[1].nombre||'').localeCompare(b[1].nombre||'','es'));
+function usuariosModal(){ exigirAdmin();const m=$('#modal'); m.classList.add('wide'); const L=Object.entries(S.usuarios).sort((a,b)=>(a[1].activo===b[1].activo?0:a[1].activo?1:-1)||String(a[1].nombre||'').localeCompare(b[1].nombre||'','es'));
   m.innerHTML=`<form method="dialog" data-form="usrs"><div class="m-h"><h2>Usuarios</h2><button type="button" class="btn ghost m-x" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="grid-template-columns:1fr">
   <p class="m-note">Cada persona crea su cuenta con «Crear cuenta» en la pantalla de ingreso. Aquí la activas y eliges su rol. Una cuenta desactivada no puede ver ni cambiar nada.</p>
   <div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Estado</th><th>Rol</th></tr></thead><tbody>${L.map(([id,u])=>`<tr><td class="w">${esc(u.nombre||'—')}${id===S.me?' <span class="muted small">(tú)</span>':''}</td><td class="w small">${esc(u.email||'')}</td><td><select class="inp" data-usr="activo" data-id="${esc(id)}" ${id===S.me?'disabled':''}><option value="1" ${u.activo?'selected':''}>Activo</option><option value="0" ${!u.activo?'selected':''}>${u.desactivado?'Desactivado':'Pendiente'}</option></select></td><td><select class="inp" data-usr="rol" data-id="${esc(id)}" ${id===S.me?'disabled':''}><option value="usuario" ${u.rol!=='admin'?'selected':''}>Usuario</option><option value="admin" ${u.rol==='admin'?'selected':''}>Administrador</option></select></td></tr>`).join('')||'<tr><td colspan="4" class="empty">Sin usuarios.</td></tr>'}</tbody></table></div>
   </div><div class="m-f"><button type="button" class="btn primary" data-act="closeModal">Listo</button></div></form>`;
   if(!m.open) m.showModal(); }
 document.addEventListener('change',async e=>{ const t=e.target; if(!t.dataset||!t.dataset.usr) return; const id=t.dataset.id; const p=t.dataset.usr==='activo'?{activo:t.value==='1',desactivado:t.value!=='1'}:{rol:t.value};
-  try{ await FS.collection('usuarios').doc(id).update(p); toast('Usuario actualizado.'); }catch(err){ toast('No se pudo actualizar el usuario.'); } });
+  try{ exigirAdmin();await FS.collection('usuarios').doc(id).update(p); toast('Usuario actualizado.'); }catch(err){ toast('No se pudo actualizar el usuario.'); } });
 
 /* Importar el respaldo completo (JSON) exportado desde la app anterior */
 const PLANO_IMG = id => /^LIM-(S2|S1|SM|P[1-5]|AZ)$/.test(id) ? `${id}.png` : null;
 function respaldoResumen(j){ const out=[]; let n=0; for(const [p,docs] of Object.entries(j.colecciones||{})){ if(!PATH_OK(p)) continue; const k=Object.keys(docs||{}).length; n+=k; if(!p.includes('/')) out.push([p,k]); } const nc=Object.entries(j.colecciones||{}).filter(([p])=>/\/conteos$/.test(p)).reduce((a,[,d])=>a+Object.keys(d).length,0); return {n,out,nc}; }
 async function importarRespaldo(j,onProg){
+  exigirAdmin();
   const items=[]; for(const [p,docs] of Object.entries(j.colecciones||{})){ if(!PATH_OK(p)) continue; for(const [id,d] of Object.entries(docs||{})){ const x={...d}; delete x._m; delete x._del; if(p==='bienes'&&x.crTomaCod!=null){ const lbl=String(x.crToma||''); x.crToma=String(x.crTomaCod); if(!x.crTomaNombre) x.crTomaNombre=lbl.includes(' — ')?lbl.split(' — ').slice(1).join(' — '):lbl; delete x.crTomaCod; } if(p==='config'&&id==='crPrioridad'&&x.map&&!x.crs){ x.crs=Object.fromEntries(Object.entries(x.map).map(([c,v])=>[String(c),{nombre:String(v.nombre||'').split(' — ').slice(1).join(' — ')||String(v.nombre||c),prioridad:Number(v.p)}])); delete x.map; } if(p==='planos'){ const f=PLANO_IMG(id); if(f) x.img=f; else if(x.img && !/^(data:|planos\/|LIM-[A-Z0-9]+\.png$)/.test(x.img)) x.img=null; } items.push([p,id,x]); } }
-  let done=0; for(let i=0;i<items.length;i+=400){ const b=FS.batch(); items.slice(i,i+400).forEach(([p,id,x])=>b.set(FS.collection(p).doc(id),{...x,_m:TS()})); await retry(()=>b.commit()); done+=Math.min(400,items.length-i); onProg&&onProg(done,items.length); }
+  let done=0; for(let i=0;i<items.length;i+=400){ exigirAdmin(); const b=FS.batch(); items.slice(i,i+400).forEach(([p,id,x])=>b.set(FS.collection(p).doc(id),{...x,_m:TS()})); await retry(()=>b.commit()); done+=Math.min(400,items.length-i); onProg&&onProg(done,items.length); }
   return items.length; }
 Object.assign(ACT,{
   uSalir(){ salir(); },
@@ -2623,8 +2718,11 @@ Object.assign(ACT,{
         setTimeout(()=>openForm({title:'Confirmar importación', danger:ya>0, ok:`Importar ${r.n.toLocaleString('es-PE')} registros`, note:`Respaldo del ${esc(fmtDT(j.fecha))}${j.por?' · '+esc(j.por):''}:<ul style="margin:6px 0 0;padding-left:18px">${r.out.map(([p,k])=>`<li>${esc(p)}: <b>${k.toLocaleString('es-PE')}</b></li>`).join('')}<li>conteos de tomas: <b>${r.nc.toLocaleString('es-PE')}</b></li></ul>${ya?`<br><b>Ya hay ${ya.toLocaleString('es-PE')} bienes en la base.</b> Los que tengan el mismo código se reemplazarán con los del respaldo.`:''}`, fields:[],
           submit:async()=>{ const n=await importarRespaldo(j,(d,t)=>modalProgress(`Importando: ${d.toLocaleString('es-PE')} de ${t.toLocaleString('es-PE')}…`)); toast(`Importados ${n.toLocaleString('es-PE')} registros.`); } }),30); return {keep:true}; } }); },
 });
-function userMenu(){ const s=$('#sync'); if(!s||$('#umenu')) return; s.insertAdjacentHTML('afterend',`<details class="menu right" id="umenu"><summary class="btn sm ghost" title="Tu cuenta">${esc(S.myName||'Mi cuenta')} <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${S.admin?`<button class="mi" role="menuitem" data-act="uUsuarios">Usuarios…</button><button class="mi" role="menuitem" data-act="uImportar">Importar respaldo…</button>`:''}<button class="mi" role="menuitem" data-act="exportarTodoExcel">Exportar todo a Excel</button><button class="mi" role="menuitem" data-act="respaldo">Descargar respaldo completo</button><button class="mi" role="menuitem" data-act="uSalir">Cerrar sesión</button></div></details>`); }
+function userMenu(){ const s=$('#sync'); if(!s) return;const abierto=$('#umenu')?.open;$('#umenu')?.remove();s.insertAdjacentHTML('afterend',`<details class="menu right" id="umenu"><summary class="btn sm ghost" title="Tu cuenta">${esc(S.myName||'Mi cuenta')} <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${S.admin?`<button class="mi" role="menuitem" data-act="uUsuarios">Usuarios…</button><button class="mi" role="menuitem" data-act="uImportar">Importar respaldo…</button>`:''}<button class="mi" role="menuitem" data-act="exportarTodoExcel">Exportar todo a Excel</button><button class="mi" role="menuitem" data-act="respaldo">Descargar respaldo completo</button><button class="mi" role="menuitem" data-act="uSalir">Cerrar sesión</button></div></details>`);if(abierto)$('#umenu').open=true; }
 
+Object.assign(ACT,{tMoverConflicto(i){const e=S.conteosConflictos?.[Number(i)];if(e)mostrarConflicto(e);}});
+// Las invocaciones directas se validan igual que los clics; los formularios revalidan al confirmar.
+for(const [nombre,fn] of Object.entries(ACT)){ACT[nombre]=function(...args){if(ADMIN_ACT.has(nombre)&&(!S.admin||S.readonly)){toast('Solo un administrador puede realizar esta acción.');return;}const anterior=accionActual;accionActual=nombre;try{return fn.apply(this,args);}finally{accionActual=anterior;}};}
 route();
 (async ()=>{
   if(ES_MOVIL){ gate(G.movil()); return; }
@@ -2641,7 +2739,7 @@ route();
     if(!d.activo){ gate(G.pendiente(u,d)); return; }
     S.me=u.uid; S.myName=d.nombre||u.email; S.admin=d.rol==='admin'; S.names[u.uid]=S.myName;
     DB=DBX; S.mode='db'; gate(''); userMenu();
-    FS.collection('usuarios').onSnapshot(s=>{ s.docs.forEach(x=>{ const v=x.data(); S.usuarios[x.id]=v; S.names[x.id]=v.nombre||v.email||''; }); if($('#modal')?.open && $('#modal form[data-form=usrs]')) usuariosModal(); },()=>{});
+    FS.collection('usuarios').onSnapshot(s=>{ s.docs.forEach(x=>{ const v=x.data(); S.usuarios[x.id]=v; S.names[x.id]=v.nombre||v.email||''; }); const yo=S.usuarios[S.me];if(yo){S.myName=yo.nombre||yo.email||'';S.admin=yo.activo&&yo.rol==='admin';S.readonly=!yo.activo;document.body.classList.toggle('readonly',S.readonly);userMenu();if(!yo.activo)gate(G.pendiente(u,yo));else gate('');}render();if($('#modal')?.open && $('#modal form[data-form=usrs]')){if(S.admin)usuariosModal();else $('#modal').close();} },()=>{});
     COLS.forEach(subscribeFS); render();
   });
 })();
