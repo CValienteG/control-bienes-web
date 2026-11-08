@@ -51,6 +51,30 @@ nav.tabs a{padding:10px 14px 12px;text-decoration:none;color:var(--muted);font-w
 nav.tabs a[aria-current="page"]{color:var(--ink);border-color:var(--accent)}
 nav.tabs a:hover{color:var(--ink)}
 nav.tabs .badge{margin-left:6px}
+nav.subtabs{display:flex;gap:4px;margin:-4px 0 4px;flex-wrap:wrap}
+nav.subtabs a{padding:6px 12px;border-radius:999px;text-decoration:none;color:var(--muted);font-weight:500;font-size:14px;border:1px solid var(--line)}
+nav.subtabs a[aria-current="page"]{color:var(--ink);background:var(--accent-soft);border-color:transparent}
+nav.subtabs a:hover{color:var(--ink)}
+/* Etapa 2.4: toma en dos columnas */
+.tomagrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:14px;align-items:start}
+.tomagrid:has(.herebox[open]) .card{grid-column:1/-1}
+.herecard .hs-l{color:var(--ink)}
+.tomagrid .card{display:grid;gap:10px;margin:0}
+.tomagrid h3{margin:0;font-size:15px}
+.herecard .hs-v{font-size:15px}
+.regopts>summary{cursor:pointer;font-size:14px;color:var(--muted)}
+.regopts .here{margin-top:10px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.regrow{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+.regrow .scan{flex:1;min-width:240px}
+.regrow .scan .inp{width:100%}
+.revbar{align-items:center}
+.revbar .lbl{font-weight:600;margin-right:4px}
+.idbig{font-size:22px;font-weight:700;letter-spacing:.2px}
+.estbox{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.estbox>div{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.estbox dt{font-size:12px;color:var(--muted)}
+.estbox dd{margin:2px 0 0;font-weight:600}
+.estbox .sinev{color:var(--muted);font-weight:500}
 main{max-width:1240px;margin:0 auto;padding:20px;display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
 main>*{min-width:0}
 select.inp{max-width:100%;min-width:0}
@@ -415,19 +439,16 @@ body.gated header.top, body.gated main, body.gated .drawer{visibility:hidden}
     </div>
     <div class="gsearch" id="gs" role="search">
       <svg class="gs-ico" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      <input id="gq" type="search" placeholder="Buscar código, bien, equipo o sistema" aria-label="Búsqueda global" autocomplete="off" aria-controls="gres" aria-expanded="false">
+      <input id="gq" type="search" placeholder="Buscar en todo… (código, bien, equipo o sistema)" aria-label="Búsqueda global" autocomplete="off" aria-controls="gres" aria-expanded="false">
       <kbd class="hide-sm" aria-hidden="true">/</kbd>
       <div class="gres" id="gres" role="listbox" hidden></div>
     </div>
     <span class="sync" id="sync" role="status" aria-live="polite"></span>
     <nav class="tabs" id="tabs" aria-label="Secciones">
-      <a href="#resumen" data-v="resumen">Resumen</a>
-      <a href="#bienes" data-v="bienes">Bienes</a>
-      <a href="#ciclo" data-v="ciclo">Ciclo de vida</a>
-      <a href="#mantenimientos" data-v="mantenimientos">Mantenimientos</a>
-      <a href="#sistemas" data-v="sistemas">Sistemas</a>
-      <a href="#planos" data-v="planos">Planos</a>
-      <a href="#inventario" data-v="inventario">Toma de inventario</a>
+      <a href="#resumen" data-g="resumen">Resumen</a>
+      <a href="#inventario" data-g="inv">Inventario</a>
+      <a href="#bienes" data-g="bienes">Bienes</a>
+      <a href="#mantenimientos" data-g="mant">Mantenimiento</a>
     </nav>
   </div>
 </header>
@@ -495,7 +516,7 @@ const verifChip = b => chip(verif(b)==='Sin verificar' ? 'Sin verificar' : `${ve
 const ubic = b => b.ubicacion || [b.sede, b.piso && (/^\d/.test(b.piso)?'Piso '+b.piso:b.piso), b.ambiente].filter(Boolean).join(' · ');
 const ubVals = v => ({sede:v.sede||'', piso:v.piso||'', ambiente:v.ambiente||'', ubicacion:ubic({sede:v.sede, piso:v.piso, ambiente:v.ambiente})});
 function deepMerge(a,b){ for(const k in b){ const v=b[k]; if(v && typeof v==='object' && !Array.isArray(v) && a[k] && typeof a[k]==='object' && !Array.isArray(a[k])) deepMerge(a[k],v); else a[k]=v; } return a; }
-function who(u){ if(!u) return 'Registro inicial'; if(u===S.me) return 'Tú'; return S.names[u] || 'Miembro del equipo'; }
+function who(u){ if(!u) return 'Registro inicial'; if(u===S.me) return 'Tú'; return S.names[u] || S.usuarios?.[u]?.nombre || S.usuarios?.[u]?.email || 'Usuario anterior (claude.ai)'; }
 function nameOf(u){ if(!u) return ''; if(u===S.me) return S.myName || ''; return S.names[u] || ''; }
 let toastT;
 function toast(msg){ let t=$('.toast'); if(!t){ t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); document.body.appendChild(t);} t.textContent=msg; clearTimeout(toastT); toastT=setTimeout(()=>t.remove(),3600); }
@@ -576,13 +597,15 @@ function doRender(){
   S._ver=(S._ver||0)+1; setSync();
   ensureSubs();
   const ae=document.activeElement; const fid=ae && ae.id && $('#main').contains(ae) ? ae.id : null; const ss=fid && ae.selectionStart!=null ? [ae.selectionStart, ae.selectionEnd] : null;
-  document.querySelectorAll('#tabs a').forEach(a=>{ if(a.dataset.v===S.view) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+  const g=grupoDe(S.view);
+  document.querySelectorAll('#tabs a').forEach(a=>{ if(a.dataset.g===g) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
   const pend = bienes().filter(b=>['requerimiento','aprobado','recibido','baja_solicitada'].includes(b.etapa)).length;
   const venc = mants().filter(m=>mEstado(m)==='vencido').length;
-  setBadge('ciclo', pend); setBadge('mantenimientos', venc);
+  S._badges={ciclo:pend, mantenimientos:venc};
+  setBadge('bienes', pend); setBadge('mant', venc);
   const m=$('#main');
   m.classList.toggle('toma-modulo',S.view==='inventario');
-  let html = banners();
+  let html = subNav() + banners();
   if(S.mode==='loading' || (DB && !(S.loaded.bienes && S.loaded.mantenimientos && S.loaded.tomas && S.loaded.sistemas && S.loaded.equipos && S.loaded.planos))) html += `<div class="card empty">Cargando registros…</div>`;
   else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv}[S.view]||vResumen)();
   let kept=false;
@@ -594,7 +617,12 @@ function doRender(){
   if(fid && !kept){ const el=document.getElementById(fid); if(el){ el.focus(); if(ss && el.setSelectionRange) try{ el.setSelectionRange(ss[0],ss[1]); }catch(e){} } }
   resolveNames();
 }
-function setBadge(v,n){ const a=$(`#tabs a[data-v="${v}"]`); let b=a.querySelector('.badge'); if(n>0){ if(!b){ b=document.createElement('span'); b.className='badge'; a.appendChild(b);} b.textContent=n; } else if(b) b.remove(); }
+/* Etapa 2.4: navegación en 4 secciones con subpestañas */
+const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}};
+function grupoDe(v){ return Object.keys(NAVG).find(k=>NAVG[k].v.some(x=>x[0]===v)) || 'resumen'; }
+function subNav(){ const G=NAVG[grupoDe(S.view)]; if(G.v.length<2) return ''; const B=S._badges||{};
+  return `<nav class="subtabs" aria-label="${esc(G.l)}">${G.v.map(([k,l])=>`<a href="#${k}" ${k===S.view?'aria-current="page"':''}>${esc(l)}${B[k]?` <span class="badge">${B[k]}</span>`:''}</a>`).join('')}</nav>`; }
+function setBadge(v,n){ const a=$(`#tabs a[data-g="${v}"]`); let b=a.querySelector('.badge'); if(n>0){ if(!b){ b=document.createElement('span'); b.className='badge'; a.appendChild(b);} b.textContent=n; } else if(b) b.remove(); }
 function banners(){
   let h='';
   if(S.carga) h+=`<div class="banner"><span class="grow"><b>Cargando tu registro ADM-0025:</b> <span class="num">${S.carga.done.toLocaleString('es-PE')} de ${S.carga.tot.toLocaleString('es-PE')}</span> bienes. No cierres la página hasta que termine.</span><div class="progress" style="flex:1;min-width:200px"><i style="width:${S.carga.done/S.carga.tot*100}%"></i></div></div>`;
@@ -653,16 +681,21 @@ function filtered(){
     if(f.etapa==='activos' && !ACTIVOS.includes(b.etapa)) return false;
     if(f.etapa && f.etapa!=='activos' && f.etapa!=='todos' && b.etapa!==f.etapa) return false;
     if(f.tipo && b.tipo!==f.tipo) return false;
-    if(f.area && (b.area||'')!==f.area) return false;
+    if(f.area && (S.igVista?crDe(b):(b.area||''))!==f.area) return false;
     if(f.ubic && (b.sede||'')!==f.ubic) return false;
     if(f.grupo && (b.categoria||'')!==f.grupo) return false;
     if(f.verif && verif(b)!==f.verif) return false;
     if(f.cond==='malos'){ if(!(b.condicion==='Malo'||b.oper==='Inoperativo')) return false; }
     else if(f.cond && b.condicion!==f.cond) return false;
-    if(q){ const s=norm([b.codigo,b.codCont,b.nombre,b.marca,b.modelo,b.serie,b.responsable,b.area,ubic(b),b.categoria,b.refDoc].join(' ')); if(!q.split(/\s+/).every(w=>s.includes(w))) return false; }
+    if(q){ const s=norm([b.idEtq!=null?'ID '+b.idEtq:'',b.codigo,b.codCont,b.nombre,b.marca,b.modelo,b.serie,b.responsable,b.area,ubic(b),b.categoria,b.refDoc].join(' ')); if(!q.split(/\s+/).every(w=>s.includes(w))) return false; }
     return true;
-  }).sort((a,b)=>(a.codigo||'~'+a.nombre).localeCompare(b.codigo||'~'+b.nombre,'es',{numeric:true}));
+  }).sort(ordenBienes());
 }
+function ordenBienes(){ const cod=(a,b)=>(a.codigo||'~'+a.nombre).localeCompare(b.codigo||'~'+b.nombre,'es',{numeric:true}); const o=S.bOrden||'id';
+  if(o==='codigo') return cod;
+  if(o==='nombre') return (a,b)=>(a.nombre||'').localeCompare(b.nombre||'','es',{numeric:true})||cod(a,b);
+  if(o==='valor') return (a,b)=>((Number(b.valorHist)||0)-(Number(a.valorHist)||0))||cod(a,b);
+  return (a,b)=>((a.idEtq??Infinity)-(b.idEtq??Infinity))||cod(a,b); }
 function vBienes(){
   const L=filtered(); const f=S.f; const shown=L.slice(0,S.lim); const eqBy={}; equipos().forEach(e=>{ if(e.bienId) (eqBy[e.bienId] ||= []).push(e); });
   const opt=(arr,v)=>arr.map(([k,l])=>`<option value="${esc(k)}" ${k===v?'selected':''}>${esc(l)}</option>`).join('');
@@ -671,10 +704,11 @@ function vBienes(){
   if(S.q) chips.unshift(`<button class="fchip" data-act="clrF" data-k="q">«${esc(S.q)}» <span aria-hidden="true">✕</span></button>`);
   const nMore=['grupo','ubic','cond','tipo'].filter(k=>f[k]).length+(f.etapa!=='activos'?1:0);
   return `<div class="row between"><h2>Bienes</h2><div class="row ro-hide"><details class="menu right"><summary class="btn">Más <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="importar">Importar desde Excel</button><button class="mi" role="menuitem" data-act="nuevoReq">Nuevo requerimiento</button></div></details><button class="btn primary" data-act="nuevoExistente">Registrar bien</button></div></div>
+  <div class="row" role="group" aria-label="Vista de bienes"><button class="btn ${!S.igVista?'on':''}" data-act="igVista" data-id="lista">Lista</button><button class="btn ${S.igVista?'on':''}" data-act="igVista" data-id="iguales">Bienes iguales</button></div>
   <div class="toolbar">
     <div class="filters">
-      <input class="inp search" id="q" type="search" placeholder="Filtrar por código, descripción, serie o custodio" value="${esc(S.q)}" aria-label="Filtrar bienes">
-      <select class="inp" id="f-area" aria-label="Área">${opt([['','Todas las áreas (CR)'],...distinct('area').map(u=>[u,u])],f.area)}</select>
+      <input class="inp search" id="q" type="search" placeholder="Filtrar esta lista: ID, código, descripción, serie o custodio" value="${esc(S.q)}" aria-label="Filtrar bienes">
+      <select class="inp" id="f-area" aria-label="Área">${opt([['','Todas las áreas (CR)'],...(S.igVista?[...new Set(bienes().map(crDe))].sort():distinct('area')).map(u=>[u,u])],f.area)}</select>
       <select class="inp" id="f-verif" aria-label="Verificación">${opt([['','Cualquier verificación'],['Sin verificar','Sin verificar'],['Encontrado','Encontrado'],['Por conciliar','Por conciliar'],['No localizado','No localizado']],f.verif)}</select>
       <button class="btn ${S.moreF?'on':''}" data-act="moreF" aria-expanded="${!!S.moreF}">Más filtros${nMore?` <span class="badge acc">${nMore}</span>`:''}</button>
     </div>
@@ -683,16 +717,92 @@ function vBienes(){
       <select class="inp" id="f-ubic" aria-label="Sede">${opt([['','Todas las sedes'],...distinct('sede').map(u=>[u,u])],f.ubic)}</select>
       <select class="inp" id="f-cond" aria-label="Estado">${opt([['','Cualquier estado'],['malos','Malo o inoperativo'],...COND.map(c=>[c,c])],f.cond)}</select>
       <select class="inp" id="f-etapa" aria-label="Etapa">${opt([['activos','En uso y mantenimiento'],['todos','Todas las etapas'],...Object.entries(ETAPAS).map(([k,v])=>[k,v.l])],f.etapa)}</select>
-      <select class="inp" id="f-tipo" aria-label="Tipo">${opt([['','AF y BM'],['AF','Activos fijos'],['BM','Bienes menores']],f.tipo)}</select>
+      <select class="inp" id="f-tipo" aria-label="Tipo">${opt([['','Activos fijos (AF) y bienes menores (BM)'],['AF','Solo activos fijos (AF)'],['BM','Solo bienes menores (BM)']],f.tipo)}</select>
     </div>`:''}
   </div>
-  <div class="row between resbar"><div class="row" style="gap:6px"><b class="num">${L.length.toLocaleString('es-PE')}</b><span class="muted">${L.length===1?'bien':'bienes'}</span>${chips.join('')}${chips.length?`<button class="btn sm ghost" data-act="clrF" data-k="*">Limpiar filtros</button>`:''}</div><button class="btn sm" data-act="copiarBienes" title="Copia la tabla filtrada para pegarla en Excel">Copiar para Excel</button></div>
-  <div class="card flush"><div class="tbl-wrap"><table>
-    <thead><tr><th>Código</th><th>Bien</th><th class="hide-sm">Área (CR)</th><th class="hide-sm">Ubicación y custodio</th><th class="hide-sm">Estado</th><th class="hide-sm">Verificación</th></tr></thead>
+  <div class="row between resbar"><div class="row" style="gap:6px"><b class="num">${L.length.toLocaleString('es-PE')}</b><span class="muted">${L.length===1?'bien':'bienes'}</span>${chips.join('')}${chips.length?`<button class="btn sm ghost" data-act="clrF" data-k="*">Limpiar filtros</button>`:''}</div><div class="row" style="gap:6px">${S.igVista?'':`<select class="inp" id="b-orden" aria-label="Ordenar por">${opt([['id','Ordenar: ID de etiqueta'],['codigo','Ordenar: código ADM'],['nombre','Ordenar: descripción'],['valor','Ordenar: valor (mayor primero)']],S.bOrden||'id')}</select>`}<button class="btn sm" data-act="${S.igVista?'igCopiar':'copiarBienes'}" title="Copia la tabla filtrada para pegarla en Excel">Copiar para Excel</button></div></div>
+  ${S.igVista?igualesTabla():`<div class="card flush"><div class="tbl-wrap"><table>
+    <thead><tr><th>ID / código</th><th>Bien</th><th class="hide-sm">Área (CR)</th><th class="hide-sm">Ubicación y custodio</th><th class="hide-sm">Estado</th><th class="hide-sm">Verificación</th></tr></thead>
     <tbody>${shown.map(b=>`<tr class="click" data-act="openBien" data-id="${esc(b.id)}" tabindex="0"><td class="mono">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td><div class="nm">${esc(b.nombre)}</div><div class="small muted">${esc([b.categoria,b.marca,b.modelo].filter(Boolean).join(' · '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}</div><div class="show-sm small muted">${esc(b.area||'')}</div><div class="show-sm row" style="gap:4px;margin-top:4px">${verifChip(b)}${b.condicion&&b.condicion!=='Por evaluar'?condChip(b.condicion):''}</div></td><td class="hide-sm">${esc(b.area||'—')}</td><td class="hide-sm">${esc(ubic(b)||'Por confirmar')}${cuadDe(b)?' · '+esc(cuadDe(b)):''}<div class="small muted">${esc(b.responsable||'')}</div></td><td class="hide-sm"><div class="row" style="gap:4px">${condChip(b.condicion)}${b.oper==='Inoperativo'?operChip(b.oper):''}${eqBy[b.id]&&['Inoperativo','Operativo parcial'].includes(estadoDe(eqBy[b.id]))?estChip(estadoDe(eqBy[b.id])):''}${b.etapa!=='en_uso'?etapaChip(b.etapa):''}</div></td><td class="hide-sm">${verifChip(b)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No hay bienes con estos filtros. <button class="btn sm" data-act="clrF" data-k="*">Limpiar filtros</button></td></tr>`}</tbody>
   </table></div></div>
-  ${more(shown.length,L.length,'masBienes')}
+  ${more(shown.length,L.length,'masBienes')}`}
   `;
+}
+
+/* ---------- Etapa 2.1: bienes iguales, sin fusionar fichas ---------- */
+function igualesFuente(){
+ return filtered().filter(b=>b.etapa!=='baja'||S.f.etapa==='baja'||S.f.etapa==='todos');
+}
+function igualesGrupos(L=igualesFuente(),unicos=!!S.igUnicos){
+ const M=new Map(),t=tomas().find(t=>t.estado==='abierta'),C=t?conteos(t.id):{};
+ for(const b of L){const key=activoKey(b.nombre);if(!M.has(key))M.set(key,{key,items:[],h:0,n:0,ver:0,ubic:new Map(),est:Object.fromEntries(COND.map(c=>[c,0]))});
+  const g=M.get(key);g.items.push(b);g.h+=Number(b.valorHist)||0;g.n+=Number(b.valorNeto)||0;
+  if(C[b.id]&&['Encontrado','Por conciliar','No localizado'].includes(C[b.id].r))g.ver++;
+  const u=ubic(b)||'Sin ubicación';g.ubic.set(u,(g.ubic.get(u)||0)+1);g.est[COND.includes(b.condicion)?b.condicion:'Por evaluar']++;
+ }
+ return [...M.values()].filter(g=>unicos||g.items.length>1).sort((a,b)=>b.items.length-a.items.length||a.key.localeCompare(b.key,'es'));
+}
+const igIds=L=>rangoIds(L.filter(b=>b.idEtq!=null).map(b=>Number(b.idEtq))).replace(/-/g,'–');
+function igualesFilas(g){return [g.key,g.items.length,igIds(g.items),[...g.ubic].map(([u,n])=>`${u}: ${n}`).join('; '),COND.map(c=>`${c}: ${g.est[c]}`).join('; '),`${g.ver} de ${g.items.length}`,g.h,g.n];}
+function igualesCopiar(G){const rows=[['Descripción','Cantidad','IDs de etiqueta','Por ubicación','Por estado','Verificados en toma abierta','Valor histórico','Valor neto'],...G.map(igualesFilas)];copyText(rows.map(r=>r.map(x=>String(x??'').replace(/[\t\r\n]+/g,' ')).join('\t')).join('\n'),'Grupos copiados. Pégalos en Excel.');}
+function igualesTabla(){const G=igualesGrupos();S.igKeys=G.map(g=>g.key);
+ return `<label class="chk"><input type="checkbox" id="ig-unicos" ${S.igUnicos?'checked':''}> Incluir únicos</label><p class="small muted">${G.length} grupos · ${G.reduce((n,g)=>n+g.items.length,0)} bienes. Cada ficha conserva sus códigos. Verificación: ${esc(tomas().find(t=>t.estado==='abierta')?.nombre||'sin toma abierta')}.</p>
+ <div class="card flush"><div class="tbl-wrap"><table><thead><tr>${['Descripción','Cantidad','IDs de etiqueta','Por ubicación','Por estado','Verificados','Valor histórico','Valor neto'].map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${G.map((g,i)=>`<tr class="click" data-act="igAbrir" data-i="${i}" tabindex="0"><td>${esc(g.key)}</td><td>${g.items.length}</td><td>${esc(igIds(g.items)||'Sin etiqueta')}</td><td>${[...g.ubic].slice(0,3).map(([u,n])=>`${esc(u)}: ${n}`).join('<br>')}${g.ubic.size>3?`<br>+${g.ubic.size-3}`:''}</td><td>${COND.map(c=>`${c}: ${g.est[c]}`).join('<br>')}</td><td>${g.ver} de ${g.items.length}</td><td>${money(g.h)}</td><td>${money(g.n)}</td></tr>`).join('')||'<tr><td colspan="8">No hay grupos con estos filtros.</td></tr>'}</tbody></table></div></div>`;
+}
+
+const IG_FIELDS=['condicion','oper','sede','piso','ambiente','amb','cuad','pt','ubicacion','responsable'];
+const igSnapshot=b=>Object.fromEntries(IG_FIELDS.map(k=>[k,b[k]??null]));
+function igualesCambios(v){
+ const d={};if(v.condicion)d.condicion=v.condicion;if(v.oper)d.oper=v.oper;if(v.responsable)d.responsable=v.responsable;
+ if(v.sede||v.piso||v.ambiente){
+  if(!v.sede||!v.piso||!v.ambiente)throw new Error('Para mover los bienes, completa sede, piso y ambiente. Si no deseas moverlos, deja los tres vacíos.');
+  Object.assign(d,{sede:v.sede,piso:v.piso,ambiente:v.ambiente,amb:'',cuad:'',pt:null,ubicacion:''});
+ }
+ if(!Object.keys(d).length)throw new Error('Elige al menos un dato para actualizar.');return d;
+}
+async function igualesAplicar(L,d){
+ if(S.readonly)throw new Error('La cuenta es de solo lectura.');
+ const key='lote-'+uid(),fecha=nowIso(),prev=L.map(b=>({id:b.id,prev:igSnapshot(S.data.bienes[b.id]),nuevo:d}));
+ if(new Blob([JSON.stringify(prev)]).size>800000)throw new Error('Lote demasiado grande. Divide los IDs en varios lotes.');
+ await put('config',key,{tipo:'Actualización de bienes iguales',u:S.me||null,fecha,estado:'en curso',prev});
+ let done=0;try{for(const x of prev){const b=S.data.bienes[x.id];if(!b)throw new Error('Una ficha ya no existe.');
+  const before=structuredClone(b);try{await patch('bienes',x.id,{...d,act:nowIso(),hist:[...(b.hist||[]),{...ev('Actualización en lote',key),lote:key,prev:x.prev,nuevo:d}]});}catch(e){S.data.bienes[x.id]=before;throw e;}done++;modalProgress(`Actualizando ${done} de ${prev.length}…`);
+ }await patch('config',key,{estado:'terminada',done});}
+ catch(e){await patch('config',key,{estado:'incompleta',done});throw e;}
+ return key;
+}
+function igualesReversibles(key){const lote=S.data.config[key];if(!lote)return [];return lote.prev.filter(x=>{const b=S.data.bienes[x.id],h=b?.hist||[],e=h[h.length-1];return e?.lote===key&&e.tipo==='Actualización en lote'&&Object.entries(x.nuevo).every(([k,v])=>JSON.stringify(b[k]??null)===JSON.stringify(v));});}
+async function igualesRevertir(key){
+ if(S.readonly)throw new Error('La cuenta es de solo lectura.');
+ const L=igualesReversibles(key);let n=0;for(const x of L){if(!igualesReversibles(key).some(a=>a.id===x.id))continue;const b=S.data.bienes[x.id];
+  const restore=Object.fromEntries(Object.keys(x.nuevo).map(k=>[k,x.prev[k]??null]));const before=structuredClone(b);try{await patch('bienes',x.id,{...restore,act:nowIso(),hist:[...(b.hist||[]),{...ev('Reversión de lote',key),lote:key,prev:igSnapshot(b)}]});}catch(e){S.data.bienes[x.id]=before;throw e;}n++;
+ }const quedan=igualesReversibles(key).length;await patch('config',key,{estado:quedan?'reversión incompleta':'revisada',reversion:nowIso()});return n;
+}
+
+function igualesActual(){return igualesGrupos(igualesFuente(),true).find(g=>g.key===S.igKey);}
+function igualesPanel(key){
+ S.igKey=key;const g=igualesActual();if(!g){toast('El grupo ya no está en estos filtros.');return;}
+ const M=new Map();for(const b of g.items){const u=ubic(b)||'Sin ubicación',c=b.condicion||'Por evaluar',k=JSON.stringify([u,c]);if(!M.has(k))M.set(k,{u,c,items:[]});M.get(k).items.push(b);}
+ const lotes=Object.entries(S.data.config).filter(([id,l])=>id.startsWith('lote-')&&l.tipo==='Actualización de bienes iguales'&&l.prev?.some(x=>g.items.some(b=>b.id===x.id))).sort((a,b)=>String(b[1].fecha).localeCompare(String(a[1].fecha)));
+ const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(key)}</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="display:block"><p>${g.items.length} bienes · ${money(g.h)} histórico · ${money(g.n)} neto</p><div class="row"><button class="btn" data-act="igGrupoCopiar">Copiar para Excel</button><button class="btn primary ro-hide" data-act="igLote">Actualizar en lote</button></div><h3>Ubicación × estado</h3><div class="tbl-wrap"><table><thead><tr><th>Ubicación</th><th>Estado</th><th>Cantidad</th><th>IDs</th></tr></thead><tbody>${[...M.values()].map(x=>`<tr><td>${esc(x.u)}</td><td>${esc(x.c)}</td><td>${x.items.length}</td><td>${esc(igIds(x.items)||'Sin etiqueta')}</td></tr>`).join('')}</tbody></table></div><h3>Fichas individuales</h3><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Código ADM / contable</th><th>Ubicación</th><th>Estado</th></tr></thead><tbody>${g.items.map(b=>`<tr><td>${esc(b.idEtq??'Sin etiqueta')}</td><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.codigo||b.id)} · ${esc(b.codCont||'')}</button></td><td>${esc(ubic(b))}</td><td>${esc(b.condicion||'Por evaluar')}</td></tr>`).join('')}</tbody></table></div>${lotes.length?`<h3>Lotes de este grupo</h3>${lotes.map(([id,l])=>`<div class="row between"><span>${esc(fmtDT(l.fecha))} · ${l.prev.length} fichas · ${esc(l.estado)}</span><button class="btn ro-hide" data-act="igRevertir" data-id="${esc(id)}" ${igualesReversibles(id).length?'':'disabled'}>Revertir lote</button></div>`).join('')}`:''}</div><div class="m-f"><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();
+}
+function igualesLoteModal(){const g=igualesActual();if(!g)return;const key=g.key;
+ openForm({title:'Actualizar en lote',wide:true,note:`${esc(key)} · ${g.items.length} fichas. Los campos vacíos conservan el valor actual. ${g.items.some(b=>b.idEtq==null)?'Las fichas sin etiqueta no se incluyen en rangos de ID.':''}`,fields:[{k:'rangos',l:'IDs o rangos',v:rangoIds(g.items.filter(b=>b.idEtq!=null).map(b=>Number(b.idEtq))),req:true,full:true},...['condicion','oper'].map(k=>({k,l:k==='condicion'?'Conservación':'Operatividad',t:'select',opts:[['','Conservar valor actual'],...(k==='condicion'?COND:OPER)]})),F.sede(),F.piso(),F.ambiente(),F.responsable()],ok:'Ver vista previa',submit:async v=>{
+  let r,d;try{r=analizarRangos(v.rangos.replace(/–/g,'-'));d=igualesCambios(v);}catch(e){return {error:e.message};}
+  const otros=r.bienes.filter(b=>activoKey(b.nombre)!==key),fuera=r.bienes.filter(b=>!g.items.some(x=>x.id===b.id));
+  const avisos=[r.inexistentes.length?`IDs inexistentes: ${rangoIds(r.inexistentes)}`:'',otros.length?`IDs de otro ACTIVO: ${igIds(otros)}`:'',fuera.length?`IDs fuera del grupo filtrado: ${igIds(fuera)}`:''].filter(Boolean);
+  const blocked=avisos.length||!r.bienes.length,initial=Object.fromEntries(r.bienes.map(b=>[b.id,JSON.stringify({...igSnapshot(b),hist:b.hist||[]})]));
+  openForm({title:'Vista previa del lote',wide:true,note:`<b>${r.bienes.length} bienes</b> · IDs ${esc(igIds(r.bienes))}<p>${Object.entries(d).filter(([k])=>!['amb','cuad','pt','ubicacion'].includes(k)).map(([k,v])=>`${esc(IMP_LABEL[k]||k)}: <b>${esc(v)}</b>`).join('<br>')}</p>${avisos.map(a=>`<p class="err">${esc(a)}</p>`).join('')}${blocked?'<p>Actualización bloqueada. Vuelve a corregir los rangos.</p>':'<p>Se guardará el valor anterior en cada ficha y en el respaldo del lote. No modifica etiquetas, códigos, valores ni conteos de la toma.</p>'}`,fields:!blocked&&r.bienes.length>=20?[{k:'conf',l:'Escribe ACTUALIZAR para confirmar',req:true,full:true}]:[],ok:blocked?'Corregir rangos':'Aplicar actualización',submit:async w=>{
+   if(blocked){setTimeout(igualesLoteModal,0);return;}
+   if(r.bienes.length>=20&&w.conf!=='ACTUALIZAR')return {error:'Escribe ACTUALIZAR para confirmar.'};
+   if(r.bienes.some(b=>!S.data.bienes[b.id]||activoKey(S.data.bienes[b.id].nombre)!==key||JSON.stringify({...igSnapshot(S.data.bienes[b.id]),hist:S.data.bienes[b.id].hist||[]})!==initial[b.id]))return {error:'Una ficha cambió desde la vista previa. Cancela y vuelve a revisar el lote.'};
+   try{await igualesAplicar(r.bienes,d);}catch(e){return {error:'El lote quedó incompleto. Conservamos el respaldo; revisa «Lotes de este grupo» antes de reintentar.'};}
+   toast(`${r.bienes.length} fichas actualizadas.`);render();setTimeout(()=>igualesPanel(key),0);
+  }});return {keep:true};
+ }});
+}
+function igualesReversionModal(id){const l=S.data.config[id],L=igualesReversibles(id);if(!l)return;
+ openForm({title:'Revertir lote',note:`Se restaurarán ${L.length} de ${l.prev.length} fichas. Se omiten las fichas que tengan cambios posteriores o ya estén revertidas. Cada reversión quedará en el historial.`,fields:L.length>=20?[{k:'conf',l:'Escribe REVERTIR para confirmar',req:true,full:true}]:[],ok:'Revertir lote',danger:true,submit:async v=>{if(L.length>=20&&v.conf!=='REVERTIR')return {error:'Escribe REVERTIR para confirmar.'};const n=await igualesRevertir(id);toast(`${n} fichas revertidas.`);render();setTimeout(()=>igualesPanel(S.igKey),0);}});
 }
 
 /* ---------- Vista: Ciclo de vida ---------- */
@@ -730,8 +840,8 @@ function alcanceTxt(t){ if(!t.alcance) return 'Todos los bienes'; const [k,...v]
 function vInv(){
   if(S.tomaSel && S.data.tomas[S.tomaSel]) return vToma(S.tomaSel);
   const T=tomas().sort((a,b)=>(a.estado==='abierta'?0:1)-(b.estado==='abierta'?0:1) || (b.creado||'').localeCompare(a.creado||''));
-  return `<div class="row between"><h2>Toma de inventario</h2><div class="row ro-hide"><button class="btn" data-act="tCargarV3">Cargar etiquetas V3</button><button class="btn" data-act="tActivo">Revisar descripciones</button><button class="btn" data-act="tFormato71">Enriquecer con Formato 7.1</button><button class="btn primary" data-act="tNueva">Nueva toma de inventario</button></div></div>
-  <p class="muted" style="margin:0;max-width:75ch">Verifica en campo que cada bien exista, dónde está, quién lo usa y en qué estado. Fija el ambiente donde estás, registra los IDs de etiqueta por rangos o escribe el ID o código (también con lectora USB), y anota solo las diferencias. Al cerrar la toma se actualizan las fichas y se marcan los no localizados.</p>
+  return `<div class="row between"><h2>Toma de inventario</h2><div class="row ro-hide"><details class="menu right"><summary class="btn">Preparar datos <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tCargarV3">Cargar etiquetas V3</button><button class="mi" role="menuitem" data-act="tActivo">Revisar descripciones</button><button class="mi" role="menuitem" data-act="tFormato71">Enriquecer con Formato 7.1</button></div></details><button class="btn primary" data-act="tNueva">Nueva toma de inventario</button></div></div>
+  <p class="muted" style="margin:0;max-width:75ch">Verifica en campo que cada bien exista, dónde está, quién lo usa y en qué estado. Fija el ambiente donde estás, registra los IDs de etiqueta por rangos o escribe a mano el ID o código, y anota solo las diferencias. Al cerrar la toma se actualizan las fichas y se marcan los no localizados.</p>
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Toma</th><th>Alcance</th><th>Avance</th><th>Por conciliar</th><th>No localizados</th><th>Sobrantes</th><th>Estado</th></tr></thead><tbody>${T.map(t=>{ const p=tomaProg(t); return `<tr class="click" data-act="openToma" data-id="${esc(t.id)}" tabindex="0"><td class="w"><div class="nm">${esc(t.nombre)}</div><div class="small muted">Iniciada ${fmtD(t.creado)}${t.cierre?` · cerrada ${fmtD(t.cierre)}`:''}</div></td><td class="w" data-l="Alcance">${esc(alcanceTxt(t))}</td><td class="grow" style="min-width:140px" data-l="Avance"><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div><div class="small muted num">${p.ver??p.ok} de ${p.tot}</div></td><td class="num" data-l="Por conciliar">${p.conc}</td><td class="num" data-l="No localiz.">${p.nol}</td><td class="num" data-l="Sobrantes">${(t.sobrantes||[]).length}</td><td>${t.estado==='abierta'?chip('En curso','c-warn'):chip('Cerrada','c-ok')}</td></tr>`; }).join('') || `<tr><td colspan="7" class="empty">Aún no hay tomas de inventario.</td></tr>`}</tbody></table></div></div>`;
 }
 function hereUbic(){ const P=planos().filter(x=>x.marco); if(!P.length||S.hManual) return ''; const H=S.here; const pid=herePid(); const p=pid?{id:pid,...S.data.planos[pid]}:null;
@@ -752,38 +862,45 @@ function vToma(id){
   const cnt={pendientes:0,verificados:0,conciliar:0,todos:L.length}; L.forEach(x=>{ const r=resOf(x); if(r==='Pendiente') cnt.pendientes++; else cnt.verificados++; if(r==='Por conciliar') cnt.conciliar++; });
   if(S.tf==='pendientes') L=L.filter(x=>resOf(x)==='Pendiente'); else if(S.tf==='verificados') L=L.filter(x=>resOf(x)!=='Pendiente'); else if(S.tf==='conciliar') L=L.filter(x=>resOf(x)==='Por conciliar'); else if(S.tf==='nol') L=L.filter(x=>resOf(x)==='No localizado');
   if(S.tAmb) L=L.filter(x=>((x.c&&x.c.amb)||x.b.amb)===S.tAmb);
-  const q=norm(S.tq); if(q) L=L.filter(x=>{ const b=x.b; const s=norm([b.idEtq,b.codigo,b.codCont,b.nombre,activoKey(b.nombre),b.marca,b.modelo,b.serie,b.area,b.refDoc,x.c?.ambiente,x.c?.cu].join(' ')); return q.split(/\s+/).every(w=>s.includes(w)); });
+  const q=norm(S.tq); if(q) L=L.filter(x=>{ const b=x.b; const s=norm([b.idEtq!=null?'ID '+b.idEtq:'',b.codigo,b.codCont,b.nombre,activoKey(b.nombre),b.marca,b.modelo,b.serie,b.area,b.refDoc,x.c?.ambiente,x.c?.cu].join(' ')); return q.split(/\s+/).every(w=>s.includes(w)); });
   L.sort((a,b)=>(a.b.codigo||'').localeCompare(b.b.codigo||'','es',{numeric:true}));
   const shown=L.slice(0,S.tlim);
   const dl=(id,arr)=>`<datalist id="${id}">${arr.map(o=>`<option value="${esc(o)}">`).join('')}</datalist>`;
   const rowOf=x=>{ const b=x.b; const c=x.c; const r=resOf(x);
     const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}` : '';
-    const acts = !open ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm primary ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
-    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
+    const acts = !open ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
+    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
   const rows=S.tGroup?gruposHtml(L,L0.filter(x=>(!S.tCR||crDe(x.b)===S.tCR)&&(!S.tPrioridad||String(x.b.prioridadCR)===S.tPrioridad)&&(!S.tActivoFiltro||activoKey(x.b.nombre)===S.tActivoFiltro)),rowOf,open,resOf):shown.map(rowOf).join('');
   const sob=(t.sobrantes||[]);
   const tf=[['pendientes','Por verificar'],['verificados','Verificados'],['conciliar','Por conciliar'],['todos','Todos']].map(([k,l])=>`<button data-act="tf" data-tf="${k}" aria-pressed="${S.tf===k}">${l} <span class="num">${cnt[k]}</span></button>`).join('');
   const H=S.here;
-  const tablaHtml=`<div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Código</th><th>Bien</th><th class="hide-sm">Área (CR)</th><th>Resultado</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="empty">${S.tf==='pendientes'&&!q?'Todos los bienes de esta toma ya fueron verificados.':'Sin bienes en esta lista.'}</td></tr>`}</tbody></table></div></div>
+  const tablaHtml=`<div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>ID / código</th><th>Bien</th><th class="hide-sm">Área (CR)</th><th>Resultado</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="empty">${S.tf==='pendientes'&&!q?'Todos los bienes de esta toma ya fueron verificados.':'Sin bienes en esta lista.'}</td></tr>`}</tbody></table></div></div>
   ${S.tGroup?'':more(shown.length,L.length,'masToma')}
 `;
   return `<div class="row"><button class="btn ghost" data-act="tVolver">← Todas las tomas</button></div>
-  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${open?`<button class="btn primary ro-hide" data-act="tCerrar">Cerrar toma</button><button class="btn ghost danger ro-hide" data-act="tEliminar">Eliminar toma</button>`:''}</div></div>
+  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${open?`<button class="btn ro-hide" data-act="tCerrar">Cerrar toma</button><details class="menu right ro-hide"><summary class="btn" aria-label="Más acciones de la toma">⋯ Más</summary><div class="menu-list" role="menu"><button class="mi danger" role="menuitem" data-act="tEliminar">Eliminar toma…</button></div></details>`:''}</div></div>
   ${(()=>{ const n=open?fichasCierreInterrumpido(t).length:0; return n?`<div class="banner warn"><span class="grow"><b>Un cierre se interrumpió:</b> ${n} fichas quedaron con el resultado de esta toma (por ejemplo «No localizado») aunque la toma sigue abierta.</span><button class="btn sm primary ro-hide" data-act="tRevertir">Revertir esas fichas</button></div>`:''; })()}
   <div class="card" style="display:grid;gap:10px"><div class="row between small"><span><b class="num">${p.ver??p.ok}</b> de <span class="num">${p.tot}</span> verificados · <span class="num">${p.enc}</span> encontrados · <span class="num">${p.conc}</span> por conciliar · <span class="num">${p.nol}</span> no localizados · <span class="num">${sob.length}</span> sobrantes</span><span class="num">${p.tot?Math.round((p.ver??p.ok)/p.tot*100):0}%</span></div><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div></div>
-  ${open?`<div class="card ro-hide scanbox"><details class="herebox" ${(S.hereOpen??!H.sede)?'open':''}><summary><span class="hs-l">Contando en</span> <b id="hs-v">${esc(hereTxt())}</b><span class="hs-e">Cambiar</span></summary><p class="hint" style="margin:10px 0">Estos datos se aplican a cada bien que marques como encontrado. Si un bien está distinto, usa «Detalle…».</p>
+  ${open?`<div class="tomagrid ro-hide">
+   <div class="card herecard"><details class="herebox" ${(S.hereOpen??!(H.piso||H.ambiente))?'open':''}><summary><span class="hs-l"><b>1. Dónde estoy</b></span><span class="hs-e">Cambiar</span><span style="flex-basis:100%"></span><b id="hs-v" class="hs-v">${esc(hereLugar())}</b></summary><p class="hint" style="margin:10px 0">Se aplica a cada bien que registres. Si un bien está en otro lugar, usa «Detalle…».</p>
     <div class="here">${hereUbic()}
       ${S.hManual||!planos().some(x=>x.marco)?`<div class="fld"><label for="h-sede">Sede / edificio</label><input class="inp" id="h-sede" data-here="sede" data-sug="sede" autocomplete="off" value="${esc(H.sede)}" placeholder="Ej.: Edificio SBP"><div class="sug" hidden></div></div>
       <div class="fld"><label for="h-piso">Piso</label><input class="inp" id="h-piso" data-here="piso" value="${esc(H.piso)}" placeholder="Ej.: 2"></div>
       <div class="fld"><label for="h-amb">Ambiente</label><input class="inp" id="h-amb" data-here="ambiente" data-sug="ambiente" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: Almacén 4.º piso"><div class="sug" hidden></div></div>`:''}
-      <div class="fld c2"><label for="h-cu">Custodio / usuario</label><input class="inp" id="h-cu" data-here="cu" data-sug="responsable" autocomplete="off" value="${esc(H.cu)}" placeholder="Si lo dejas vacío, se mantiene el registrado"><div class="sug" hidden></div></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-act="plElegir">${planos().some(x=>x.marco)?'Tocar mi ubicación en el plano':'Elegir ambiente en el plano'}</button>${planos().some(x=>x.marco)?`<button type="button" class="btn sm ghost" data-act="hManual">${S.hManual?'Usar piso, zona y ambiente':'Escribir la ubicación a mano'}</button>`:''}<button type="button" class="btn sm" data-act="hListo">Listo</button></div></details></div>
+   <div class="card regcard"><h3>2. Registrar</h3>
+    <div class="regrow"><form class="scan" data-form="scan"><input class="inp" id="scan" type="search" enterkeyhint="search" value="${esc(S.scanQ||'')}" placeholder="ID, código o descripción" autocomplete="off" autocapitalize="off" aria-label="ID, código o descripción del bien encontrado"></form><button class="btn primary" data-act="tRegistrarIDs">Registrar IDs (rango)</button></div>
+    <div id="scanres" class="scanres" hidden></div>
+    <details class="regopts" ${S.regOpen?'open':''}><summary>Opciones del registro: <b>${esc(H.c)}</b> · <b>${esc(H.o)}</b>${H.cu?` · custodio <b>${esc(H.cu)}</b>`:' · custodio sin cambio'}</summary><div class="here">
       <div class="fld"><label for="h-c">Conservación</label><select class="inp" id="h-c" data-here="c">${COND.map(k=>`<option ${k===H.c?'selected':''}>${k}</option>`).join('')}</select></div>
       <div class="fld"><label for="h-o">Operatividad</label><select class="inp" id="h-o" data-here="o">${OPER.map(k=>`<option ${k===H.o?'selected':''}>${k}</option>`).join('')}</select></div>
-    </div></details>
-    <div class="row"><button type="button" class="btn sm" data-act="plElegir">${planos().some(x=>x.marco)?'Tocar mi ubicación en el plano':'Elegir ambiente en el plano'}</button>${planos().some(x=>x.marco)?`<button type="button" class="btn sm ghost" data-act="hManual">${S.hManual?'Usar piso, zona y ambiente':'Escribir la ubicación a mano'}</button>`:''}</div>
-    <div class="row"><button class="btn primary" data-act="tRegistrarIDs">Registrar IDs</button></div><form class="scan" data-form="scan"><input class="inp" id="scan" type="search" enterkeyhint="search" value="${esc(S.scanQ||'')}" placeholder="ID de etiqueta, código ADM, contable o descripción" autocomplete="off" autocapitalize="off" aria-label="Buscar el bien encontrado"></form>
-    <div id="scanres" class="scanres" hidden></div></div>`:''}
-  <div class="filters"><div class="seg" role="group" aria-label="Vista"><button data-act="tVista" data-v="lista" aria-pressed="${S.tView!=='plano'}">Lista</button><button data-act="tVista" data-v="plano" aria-pressed="${S.tView==='plano'}">Plano</button></div>${S.tView!=='plano'?`<div class="seg" role="group" aria-label="Filtrar">${tf}</div>`:''}${S.tView!=='plano'?`<select class="inp" id="t-grp" data-act-change="tGrupo" aria-label="Agrupar"><option value="">Sin agrupar</option>${Object.entries(GRUPOS).map(([k,l])=>`<option value="${k}" ${S.tGroup===k?'selected':''}>Agrupar: ${esc(l)}</option>`).join('')}</select><select class="inp" id="t-prioridad" aria-label="Prioridad CR"><option value="">Todas las prioridades CR</option>${[...new Set(L0.map(x=>x.b.prioridadCR).filter(v=>v!=null))].sort((a,b)=>a-b).map(n=>`<option value="${n}" ${String(n)===S.tPrioridad?'selected':''}>Prioridad ${n}</option>`).join('')}</select><select class="inp" id="t-activo" aria-label="Filtrar ACTIVO"><option value="">Todos los ACTIVO (busca también por texto)</option>${[...new Set(L0.map(x=>activoKey(x.b.nombre)))].sort().map(k=>`<option value="${esc(k)}" ${k===S.tActivoFiltro?'selected':''}>${esc(k)}</option>`).join('')}</select><select class="inp" id="t-cr" aria-label="Filtrar por CR"><option value="">Todos los CR</option>${CRS.map(c=>`<option value="${esc(c)}" ${S.tCR===c?'selected':''}>${esc(c)}</option>`).join('')}</select>`:''}${S.tAmb&&S.tView!=='plano'?`<button class="fchip" data-act="tAmbQuitar">Ambiente: ${esc(ambDe(S.tAmb)?.a.nombre||'—')} <span aria-hidden="true">✕</span></button>`:''}<input class="inp search" id="tq" type="search" placeholder="Buscar en esta toma…" value="${esc(S.tq)}" aria-label="Buscar en esta toma"></div>
+      <div class="fld"><label for="h-cu">Custodio / usuario</label><input class="inp" id="h-cu" data-here="cu" data-sug="responsable" autocomplete="off" value="${esc(H.cu)}" placeholder="Vacío = se mantiene el registrado"><div class="sug" hidden></div></div>
+    </div></details></div>
+  </div>`:''}
+  ${(()=>{ const nF=[S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; const lista=S.tView!=='plano'; const fo=S.tFilt??(nF>0);
+  return `<div class="filters revbar"><span class="lbl">Revisar</span>${lista?`<div class="seg" role="group" aria-label="Filtrar">${tf}</div><select class="inp" id="t-grp" data-act-change="tGrupo" aria-label="Agrupar"><option value="">Sin agrupar</option>${Object.entries(GRUPOS).map(([k,l])=>`<option value="${k}" ${S.tGroup===k?'selected':''}>Agrupar: ${esc(l)}</option>`).join('')}</select><button class="btn ${fo?'on':''}" data-act="tFiltros" aria-expanded="${!!fo}">Filtros${nF?` <span class="badge acc">${nF}</span>`:''}</button>`:''}${S.tAmb&&lista?`<button class="fchip" data-act="tAmbQuitar">Ambiente: ${esc(ambDe(S.tAmb)?.a.nombre||'—')} <span aria-hidden="true">✕</span></button>`:''}<div class="seg" role="group" aria-label="Vista" style="margin-left:auto"><button data-act="tVista" data-v="lista" aria-pressed="${lista}">Lista</button><button data-act="tVista" data-v="plano" aria-pressed="${!lista}">Plano</button></div></div>
+  ${lista&&fo?`<div class="filters more"><input class="inp search" id="tq" type="search" placeholder="Buscar en esta toma: ID, código o descripción" value="${esc(S.tq)}" aria-label="Buscar en esta toma"><select class="inp" id="t-prioridad" aria-label="Prioridad CR"><option value="">Todas las prioridades CR</option>${[...new Set(L0.map(x=>x.b.prioridadCR).filter(v=>v!=null))].sort((a,b)=>a-b).map(n=>`<option value="${n}" ${String(n)===S.tPrioridad?'selected':''}>Prioridad ${n}</option>`).join('')}</select><select class="inp" id="t-activo" aria-label="Filtrar ACTIVO"><option value="">Todos los ACTIVO</option>${[...new Set(L0.map(x=>activoKey(x.b.nombre)))].sort().map(k=>`<option value="${esc(k)}" ${k===S.tActivoFiltro?'selected':''}>${esc(k)}</option>`).join('')}</select><select class="inp" id="t-cr" aria-label="Filtrar por CR"><option value="">Todos los CR</option>${CRS.map(c=>`<option value="${esc(c)}" ${S.tCR===c?'selected':''}>${esc(c)}</option>`).join('')}</select>${nF?`<button class="btn sm ghost" data-act="tLimpiarF">Limpiar filtros</button>`:''}</div>`:''}`; })()}
   ${S.tView==='plano'?vTomaPlano(t,C):tablaHtml}
   <div class="card"><div class="card-h"><h3>Sobrantes</h3>${open?`<button class="btn sm ro-hide" data-act="tSobrante">Agregar sobrante</button>`:''}</div><p class="small muted" style="margin:0 0 8px">Bienes encontrados físicamente que no figuran en el registro.</p>${sob.length?`<div class="list">${sob.map((s,i)=>`<div class="li"><div class="grow"><div class="t">${esc(s.d)}${s.cant>1?` <span class="muted">× ${s.cant}</span>`:''}</div><div class="small muted">${esc([s.marca,s.modelo,s.serie&&'S/N '+s.serie].filter(Boolean).join(' · '))}${s.marca||s.modelo||s.serie?' · ':''}${esc(s.ub||'')}${s.nota?' · '+esc(s.nota):''}</div></div>${open?`<button class="btn sm ghost ro-hide" data-act="tSobDel" data-i="${i}">Quitar</button>`:`${s.reg?chip('Registrado','c-ok'):`<button class="btn sm ro-hide" data-act="tSobReg" data-i="${i}">Registrar como bien</button>`}`}</div>`).join('')}</div>`:`<div class="empty small">Sin sobrantes.</div>`}</div>`;
 }
@@ -799,7 +916,7 @@ function renderDrawer(){
   if(e==='requerimiento') A.push(['aprobar','Aprobar','primary'],['rechazar','Rechazar','danger']);
   if(e==='aprobado') A.push(['recibir','Registrar recepción','primary']);
   if(e==='recibido') A.push(['alta','Dar de alta','primary']);
-  if(e==='en_uso') A.push(['condicion','Actualizar estado','primary'],['transferir','Transferir / reasignar',''],['mProg','Programar mantenimiento',''],['afSistema','Agregar a un sistema',''],['solBaja','Solicitar baja','danger']);
+  if(e==='en_uso') A.push(['condicion','Actualizar estado','primary'],['transferir','Transferir / reasignar',''],['mProg','Programar mantenimiento',''],...(puedeSerSistema(b)?[['afSistema','Agregar a un sistema','']]:[]),['solBaja','Solicitar baja','danger']);
   if(e==='mantenimiento') A.push(['mProg','Programar mantenimiento','primary']);
   if(e==='baja_solicitada') A.push(['aprobarBaja','Aprobar baja','primary'],['rechazarBaja','Rechazar baja','']);
   A.push(['editar','Editar ficha','']);
@@ -810,8 +927,9 @@ function renderDrawer(){
   const kv=(k,v,mono,full)=>v? `<div ${full?'style="grid-column:1/-1"':''}><dt>${k}</dt><dd class="${mono?'mono':''}">${esc(v)}</dd></div>` : '';
   const hist=[...(b.hist||[])].reverse(); const histShown=S.histAll?hist:hist.slice(0,5);
   const sinUb=!b.sede&&!b.piso&&!b.ambiente&&!b.responsable;
-  d.innerHTML=`<div class="dr-h"><div class="row between" style="align-items:flex-start;flex-wrap:nowrap"><div style="min-width:0"><div class="mono small muted">${esc(b.codigo||'Sin código')}${b.codCont?' · '+esc(b.codCont):''}</div><h2>${esc(b.nombre)}</h2></div><button class="btn ghost dr-close" data-act="closeBien" aria-label="Cerrar ficha">✕</button></div><div class="row" style="gap:6px">${etapaChip(e)} ${ACTIVOS.includes(e)?verifChip(b):''} ${condChip(b.condicion)} ${operChip(b.oper)} ${tipoChip(b.tipo)}${b.ejemplo?chip('Ejemplo','nodot'):''}</div>${actions}</div>
+  d.innerHTML=`<div class="dr-h"><div class="row between" style="align-items:flex-start;flex-wrap:nowrap"><div style="min-width:0">${b.idEtq!=null?`<div class="idbig mono">ID ${esc(b.idEtq)}</div>`:''}<div class="mono small muted">${esc(b.codigo||'Sin código ADM')}${b.codCont?' · '+esc(b.codCont):''}</div><h2>${esc(b.nombre)}</h2></div><button class="btn ghost dr-close" data-act="closeBien" aria-label="Cerrar ficha">✕</button></div><div class="row" style="gap:6px">${etapaChip(e)} ${ACTIVOS.includes(e)?verifChip(b):''}${b.ejemplo?chip('Ejemplo','nodot'):''}</div>${actions}</div>
   <div class="dr-b">
+    <section><h3 class="sec">Estado</h3>${(()=>{ const v=(x)=>x&&x!=='Por evaluar'?esc(x):'<span class="sinev">Sin evaluar</span>'; return `<dl class="estbox"><div><dt>Conservación</dt><dd>${v(b.condicion)}</dd></div><div><dt>Operatividad</dt><dd>${v(b.oper)}</dd></div><div><dt>Tipo</dt><dd>${b.tipo?`${esc(TIPO[b.tipo]||b.tipo)} (${esc(b.tipo)})`:'<span class="sinev">Sin definir</span>'}</dd></div></dl>`; })()}</section>
     <section><h3 class="sec">Ubicación y custodio</h3>${sinUb?`<p class="hint">Aún no se conoce dónde está ni quién lo usa. Se completa al verificarlo en una toma de inventario.</p>`:''}<dl class="kv">${kv('Sede / edificio',b.sede)}${kv('Piso',b.piso)}${kv('Ambiente',b.ambiente)}${kv('Cuadrante',cuadDe(b))}${kv('Custodio / usuario',b.responsable)}${kv('Área (CR)',b.area)}${kv('Última verificación', b.inv? `${b.inv.r} · ${fmtD(b.inv.f)} · ${b.inv.toma||''}` : 'Sin verificación física')}${b.crs && b.crs.includes(';')?kv('CR asociados',b.crs,false,true):''}</dl>${(()=>{ const r=ambDe(b.amb); return r?`<div class="miniwrap">${planoHtml(r.p,{hl:r.a.id,mini:true})}<div class="small muted">Plano ${esc(planoNombre(r.p))} · ${esc(r.a.nombre)} <button class="btn link small" data-act="plOpen" data-id="${esc(r.p.id)}">Ver plano</button></div></div>`:''; })()}</section>
     ${afSistemasHtml(id)}
     <section><h3 class="sec">Datos del bien</h3><dl class="kv">${kv('Grupo / categoría',b.categoria)}${kv('Marca y modelo',[b.marca,b.modelo].filter(Boolean).join(' '))}${kv('N.º de serie / placa',b.serie,true)}${kv('Código contable',b.codCont,true)}${kv('Fecha de adquisición',b.fechaAdq?fmtD(b.fechaAdq):'')}${kv('Fecha de alta',b.fechaAlta?fmtD(b.fechaAlta):'')}${kv('Valor histórico',money(b.valorHist))}${kv('Valor neto',money(b.valorNeto))}${kv('Proveedor',b.proveedor)}${kv('Documento de ingreso',b.documento)}${kv('Referencia documental',b.refDoc,false,true)}${kv('Observación documental',b.obsDoc,false,true)}${e==='baja'||e==='baja_solicitada'?kv('Motivo de baja',b.motivoBaja,false,true):''}${e==='baja'?kv('Destino',b.destinoBaja):''}${kv('Observaciones',b.obs,false,true)}</dl></section>
@@ -1018,7 +1136,7 @@ function vSistemas(){
     const ok=eqs.filter(e=>['Operativo','No aplica'].includes(e.oper)).length, bad=eqs.filter(e=>e.oper==='Inoperativo').length, tot=Math.max(1,eqs.length);
     return `<button class="kcard sis" data-act="openSis" data-id="${esc(s.id)}"><div class="row between"><span class="mono small muted">${esc(s.id)}</span>${estChip(est)}</div><div class="nm">${esc(sisNombre(s))}</div><div class="sbar" title="${ok} operativos · ${bad} inoperativos · ${eqs.length-ok-bad} sin probar"><i style="width:${ok/tot*100}%;background:var(--ok)"></i><i style="width:${bad/tot*100}%;background:var(--bad)"></i></div><div class="meta num">${eqs.length} ${eqs.length===1?'equipo':'equipos'} · ${afs.size} AF${cj?` · ${cj} por desglosar`:''}</div></button>`; };
   const faltan=Object.keys(SIS).filter(t=>!S.data.sistemas?.[`${t}-LIM`]);
-  return `<div class="row between"><h2>Sistemas</h2>${''}</div>
+  return `<div class="row between"><h2>Sistemas</h2>${S.admin?'<button class="btn ro-hide" data-act="sCategorias">Categorías permitidas</button>':''}</div>
   <p class="muted" style="margin:0;max-width:78ch">Agrupan los equipos instalados que dan servicio al edificio. Cada sistema sale de un catálogo fijo y existe una sola vez por sede; los bienes portátiles o de uso individual no forman parte de un sistema. El estado se calcula a partir de sus equipos.</p>
   <div class="cols">${Sx.map(card).join('') || `<div class="empty">Aún no hay sistemas.</div>`}</div>
   ${faltan.length||true?`<div class="card ro-hide"><div class="card-h"><h3>Catálogo · ${esc(SEDES.LIM.n)}</h3><span class="small muted">Tipos aún no creados</span></div><div class="row">${faltan.map(t=>`<button class="btn sm" data-act="sCrear" data-t="${t}">+ ${esc(SIS[t].n)}</button>`).join('')}${faltan.length?'':'<span class="small muted">Todos los tipos del catálogo ya están creados.</span>'}<button class="btn sm ghost" data-act="sOtro">Otro tipo (excepcional)…</button></div><p class="small muted" style="margin:10px 0 0">Las salas de ventas de provincia son locales alquilados: sus instalaciones las mantiene el arrendador, por eso no llevan sistemas.</p></div>`:''}`;
@@ -1030,7 +1148,7 @@ function vSistema(id){
   const rowOf=e=>{ const b=e.bienId?S.data.bienes[e.bienId]:null; const cj=e.tipoEq==='CJ';
     return `<tr><td class="mono w">${esc(e.codigo)}</td><td class="w"><div class="nm">${esc(e.nombre)}${e.cantidad>1?` <span class="muted">× ${e.cantidad}</span>`:''}</div><div class="small muted">${esc(tipos[e.tipoEq]||e.tipoEq)}${[e.marca,e.modelo].filter(Boolean).length?' · '+esc([e.marca,e.modelo].filter(Boolean).join(' ')):''}${e.serie?` · S/N <span class="mono">${esc(e.serie)}</span>`:''}${e.capacidad?' · '+esc(e.capacidad):''}</div>${(e.componentes||[]).length?`<div class="small muted">Componentes: ${esc(e.componentes.join(', '))}</div>`:''}</td>
       <td class="hide-sm">${esc(ubicEq(e)||'Por confirmar')}</td>
-      <td data-l="AF de respaldo">${b?`<button class="btn link mono" data-act="openBien" data-id="${esc(e.bienId)}">${esc(afLabel(b))}</button><div class="small muted">${esc(b.codigo)}</div>`:'<span class="small muted">Sin AF</span>'}</td>
+      <td data-l="AF de respaldo">${b?`<button class="btn link mono" data-act="openBien" data-id="${esc(e.bienId)}">${esc(afLabel(b))}</button><div class="small muted">${esc(b.codigo)}${!puedeSerSistema(b)?' · Categoría no habitual en sistemas':''}</div>`:'<span class="small muted">Sin AF</span>'}</td>
       <td data-l="Estado"><div class="row" style="gap:4px">${operChip(e.oper||'No probado')}${e.condicion&&e.condicion!=='Por evaluar'?condChip(e.condicion):''}</div></td>
       <td class="w acts"><div class="row ro-hide" style="gap:4px;flex-wrap:nowrap">${cj?`<button class="btn sm primary" data-act="eDesglosar" data-id="${esc(e.id)}">Desglosar</button>`:`<button class="btn sm" data-act="eEstado" data-id="${esc(e.id)}">Estado</button>`}<button class="btn sm ghost" data-act="eEditar" data-id="${esc(e.id)}">Editar</button></div></td></tr>`; };
   const grp={}; eqs.forEach(e=>(grp[e.tipoEq] ||= []).push(e));
@@ -1041,11 +1159,41 @@ function vSistema(id){
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Código</th><th>Equipo</th><th class="hide-sm">Ubicación</th><th>AF de respaldo</th><th>Estado</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="6" class="empty">Sin equipos. Vincula un AF o agrega equipos.</td></tr>`}</tbody></table></div></div>
   <p class="small muted" style="margin:0">«Conjunto por desglosar»: un AF que agrupa varios equipos y todavía no tiene levantamiento técnico. Al desglosarlo, sus equipos quedan respaldados por el mismo AF.</p>`;
 }
+/* Etapa 2.2: una sola regla para categorías admitidas en sistemas. */
+function puedeSerSistema(b){
+ const categorias=S.data.config.sistemasCategorias?.categorias??['EQUIPOS'];
+ return !!b&&Array.isArray(categorias)&&[b.categoria,b.seccion].some(c=>categorias.includes(String(c||'').trim().toUpperCase()));
+}
+function respaldoSistema(code,existente=null){
+ const b=findAF(code);if(!b)return {error:`No encontré el activo fijo ${code}.`};
+ if(!puedeSerSistema(b)&&b.id!==existente&&!$('#af-otras')?.checked)return {error:'Categoría no habitual en sistemas. Marca «Mostrar otras categorías» para elegir este bien como excepción.'};
+ return {b};
+}
+function controlRespaldoSistema(existente=null){
+ const inp=$('#ff-af');if(!inp)return;attachSug('ff-af','afSistema');
+ const fld=inp.closest('.fld');fld.insertAdjacentHTML('beforeend','<label class="chk"><input type="checkbox" id="af-otras"> Mostrar otras categorías</label><span class="help" id="af-aviso" role="status"></span>');
+ const aviso=()=>{const b=findAF(inp.value),otras=$('#af-otras').checked;$('#af-aviso').textContent=b&&!puedeSerSistema(b)?'Categoría no habitual en sistemas.'+(b.id===existente?' Se conserva el vínculo existente.':otras?' Se vinculará como excepción.':' Marca la casilla para elegirlo como excepción.'):otras?'Las otras categorías se muestran como excepción; verifica que corresponda al sistema.':'';};
+ inp.addEventListener('input',aviso);$('#af-otras').addEventListener('change',()=>{aviso();sugCloseAll();});aviso();
+}
+function categoriasSistemasModal(){
+ if(!S.admin||S.readonly){toast('Solo un administrador puede editar las categorías.');return;}
+ const actual=S.data.config.sistemasCategorias?.categorias??['EQUIPOS'];
+ openForm({title:'Categorías permitidas en sistemas',note:'Se aplican a categoría o sección del bien. No elimina vínculos existentes. Las excepciones se siguen eligiendo con «Mostrar otras categorías».',fields:[{k:'categorias',l:'Categorías separadas por comas',v:actual.join(', '),req:true,full:true}],ok:'Ver vista previa',submit:async v=>{
+  const categorias=[...new Set(v.categorias.split(',').map(c=>c.trim().toUpperCase()).filter(Boolean))];if(!categorias.length)return {error:'Indica al menos una categoría.'};
+  const previa=JSON.stringify(S.data.config.sistemasCategorias??null);
+  openForm({title:'Confirmar categorías permitidas',note:`Antes: ${actual.map(esc).join(', ')}<br>Ahora: <b>${categorias.map(esc).join(', ')}</b><p>Los vínculos existentes se conservan.</p>`,fields:[],ok:'Guardar categorías',submit:async()=>{
+   if(!S.admin||S.readonly)return {error:'Solo un administrador puede editar las categorías.'};
+   if(JSON.stringify(S.data.config.sistemasCategorias??null)!==previa)return {error:'La configuración cambió. Cancela y vuelve a revisarla.'};
+   await put('config','sistemasCategorias',{...(S.data.config.sistemasCategorias||{}),categorias,prev:actual,act:nowIso(),u:S.me||null});render();toast('Categorías actualizadas.');
+  }});return {keep:true};
+ }});
+}
+
 function afSistemasHtml(bid){
   const eqs=equipos().filter(e=>e.bienId===bid).sort(byCode); const b=S.data.bienes[bid];
-  if(!eqs.length) return ACTIVOS.includes(b?.etapa) ? `<section><div class="card-h" style="margin-bottom:6px"><h3>Sistema</h3><button class="btn sm ro-hide" data-act="afSistema" data-id="${esc(bid)}">Agregar a un sistema</button></div><div class="small muted">No forma parte de ningún sistema.</div></section>` : '';
+  if(!eqs.length) return puedeSerSistema(b)&&ACTIVOS.includes(b?.etapa) ? `<section><div class="card-h" style="margin-bottom:6px"><h3>Sistema</h3><button class="btn sm ro-hide" data-act="afSistema" data-id="${esc(bid)}">Agregar a un sistema</button></div><div class="small muted">No forma parte de ningún sistema.</div></section>` : '';
   const est=estadoDe(eqs);
-  return `<section><div class="card-h" style="margin-bottom:6px"><h3>Sistema y equipos</h3><div class="row">${estChip(est)}<button class="btn sm ro-hide" data-act="afSistema" data-id="${esc(bid)}">Agregar a otro sistema</button></div></div><div class="list">${eqs.map(e=>{ const s=S.data.sistemas?.[e.sistemaId]; return `<div class="li"><div class="grow"><div class="t"><span class="mono small">${esc(e.codigo)}</span> · ${esc(e.nombre)}${e.cantidad>1?` × ${e.cantidad}`:''}</div><div class="small muted"><button class="btn link small" data-act="openSis" data-id="${esc(e.sistemaId)}">${esc(sisNombre(s?{id:e.sistemaId,...s}:null))}</button>${ubicEq(e)?' · '+esc(ubicEq(e)):''}</div></div>${operChip(e.oper||'No probado')}</div>`; }).join('')}</div></section>`;
+  return `<section><div class="card-h" style="margin-bottom:6px"><h3>Sistema y equipos</h3>${!puedeSerSistema(b)?'<span class="small muted">Categoría no habitual en sistemas</span>':''}<div class="row">${estChip(est)}${puedeSerSistema(b)?`<button class="btn sm ro-hide" data-act="afSistema" data-id="${esc(bid)}">Agregar a otro sistema</button>`:''}</div></div><div class="list">${eqs.map(e=>{ const s=S.data.sistemas?.[e.sistemaId]; return `<div class="li"><div class="grow"><div class="t"><span class="mono small">${esc(e.codigo)}</span> · ${esc(e.nombre)}${e.cantidad>1?` × ${e.cantidad}`:''}</div><div class="small muted"><button class="btn link small" data-act="openSis" data-id="${esc(e.sistemaId)}">${esc(sisNombre(s?{id:e.sistemaId,...s}:null))}</button>${ubicEq(e)?' · '+esc(ubicEq(e)):''}</div></div>${operChip(e.oper||'No probado')}</div>`; }).join('')}</div></section>`;
 }
 function eqFields(s, e={}, extra=[]){
   const tipos=eqTipos(s.tipo); const zonas=SEDES[s.sede]?.zonas||[];
@@ -1062,7 +1210,10 @@ function eqFields(s, e={}, extra=[]){
 }
 function sisSelectOpts(){ const ex=sistemas().sort((a,b)=>sisNombre(a).localeCompare(sisNombre(b),'es')).map(s=>[s.id,sisNombre(s)]); const nuevos=Object.keys(SIS).filter(t=>!S.data.sistemas?.[`${t}-LIM`]).map(t=>['nuevo:'+t,`${SIS[t].n} · ${SEDES.LIM.n} (se creará)`]); return [...ex,...nuevos]; }
 async function ensureSis(val){ if(!val.startsWith('nuevo:')) return val; const t=val.slice(6); const id=`${t}-LIM`; if(!S.data.sistemas?.[id]) await put('sistemas',id,{tipo:t,sede:'LIM',creado:nowIso(),u:S.me||null}); return id; }
-async function vincularAF(sisId, b, tipoEq, zona){
+async function vincularAF(sisId, b, tipoEq, zona, otras=false){
+  b=S.data.bienes[b.id]?{id:b.id,...S.data.bienes[b.id]}:null;
+  if(!b)return {error:'El bien ya no existe.'};
+  if(!puedeSerSistema(b)&&!otras)return {error:'Categoría no habitual en sistemas. Selecciona explícitamente la excepción desde Sistemas.'};
   if(equipos().some(e=>e.sistemaId===sisId && e.bienId===b.id)) return {error:`El AF ${afLabel(b)} ya está vinculado a este sistema.`};
   const s=S.data.sistemas[sisId]; const base=nextEqBase(sisId,tipoEq); const codigo=eqCode(base,0); const cj=tipoEq==='CJ';
   await crearEquipo({sistemaId:sisId,tipoEq,codigo,nombre:cj?`${b.nombre} (por desglosar)`:b.nombre,marca:b.marca||'',modelo:b.modelo||'',serie:b.serie||'',bienId:b.id,zona:zona||''}, `Vinculado desde el AF ${afLabel(b)}`);
@@ -1070,6 +1221,7 @@ async function vincularAF(sisId, b, tipoEq, zona){
   return {codigo};
 }
 const SIS_ACT = {
+ sCategorias(){categoriasSistemasModal();},
   openSis(id){ S.sisSel=id; closeBien(); if(S.view!=='sistemas') location.hash='sistemas'; render(); window.scrollTo(0,0); },
   sVolver(){ S.sisSel=null; render(); },
   sCrear(_,el){ const t=el.dataset.t; const id=`${t}-LIM`; if(S.data.sistemas?.[id]) return SIS_ACT.openSis(id); put('sistemas',id,{tipo:t,sede:'LIM',creado:nowIso(),u:S.me||null}).then(()=>{ S.sisSel=id; render(); toast(`Sistema ${id} creado.`); }); },
@@ -1079,36 +1231,36 @@ const SIS_ACT = {
     submit:async v=>{ await patch('sistemas',id,v); toast('Datos actualizados.'); } }); },
   eVincular(sisId){ const s=S.data.sistemas[sisId]; const tipos=eqTipos(s.tipo);
     openForm({title:'Vincular AF al sistema', note:'Si el AF es un solo equipo, elige su tipo. Si agrupa varios equipos (como un «sistema HVAC»), elige <b>Conjunto por desglosar</b> y desglósalo cuando tengas el levantamiento técnico.', fields:[{k:'af',l:'Código del AF (contable o ADM)',req:true,full:true,ph:'Ej.: E-000919'}, {k:'tipoEq',l:'Tipo de equipo',t:'select',opts:Object.entries(tipos).map(([k,v])=>[k,`${v} (${k})`]),req:true}, {k:'zona',l:'Zona',t:'select',opts:[['','Por confirmar'],...(SEDES[s.sede]?.zonas||[]).map(z=>[z,z])]}],
-      submit:async v=>{ const b=findAF(v.af); if(!b) return {error:`No encontré el AF ${v.af}.`}; const r=await vincularAF(sisId,b,v.tipoEq,v.zona); if(r.error) return r; toast(`${afLabel(b)} vinculado como ${r.codigo}.`); } });
-    attachSug('ff-af','af'); },
-  afSistema(bid){ const b={id:bid,...S.data.bienes[bid]}; const opts=sisSelectOpts();
+      submit:async v=>{ const sel=respaldoSistema(v.af);if(sel.error)return sel;const b=sel.b; const r=await vincularAF(sisId,b,v.tipoEq,v.zona,!!$('#af-otras')?.checked); if(r.error) return r; toast(`${afLabel(b)} vinculado como ${r.codigo}.`); } });
+    controlRespaldoSistema(); },
+  afSistema(bid){ if(!puedeSerSistema(S.data.bienes[bid])){toast('Esta categoría no corresponde a sistemas.');return;} const b={id:bid,...S.data.bienes[bid]}; const opts=sisSelectOpts();
     const allTipos=t=>Object.entries(eqTipos(t)).map(([k,v])=>`<option value="${k}">${esc(v)} (${k})</option>`).join('');
     const tipoOf=val=>val.startsWith('nuevo:')?val.slice(6):S.data.sistemas[val]?.tipo;
     openForm({title:'Agregar a un sistema', note:`<span class="mono">${esc(afLabel(b))}</span> · ${esc(b.nombre)}`, fields:[{k:'sis',l:'Sistema',t:'select',opts,req:true,full:true}, {k:'tipoEq',l:'Tipo de equipo',t:'select',opts:Object.entries(eqTipos(tipoOf(opts[0][0]))).map(([k,v])=>[k,`${v} (${k})`]),req:true}, {k:'zona',l:'Zona',t:'select',opts:[['','Por confirmar'],...SEDES.LIM.zonas.map(z=>[z,z])]}],
-      submit:async v=>{ const sid=await ensureSis(v.sis); const r=await vincularAF(sid,b,v.tipoEq,v.zona); if(r.error) return r; toast(`Agregado a ${sid} como ${r.codigo}.`); } });
+      submit:async v=>{ if(!puedeSerSistema(S.data.bienes[bid]))return {error:'La categoría del bien ya no está permitida.'}; const sid=await ensureSis(v.sis); const r=await vincularAF(sid,b,v.tipoEq,v.zona); if(r.error) return r; toast(`Agregado a ${sid} como ${r.codigo}.`); } });
     setTimeout(()=>{ const s=$('#ff-sis'), t=$('#ff-tipoEq'); if(s&&t) s.addEventListener('change',()=>{ t.innerHTML=allTipos(tipoOf(s.value)); }); },0); },
   eAgregar(sisId, _el, preset){ const s=S.data.sistemas[sisId]; const cjE=preset?.cj?S.data.equipos[preset.cj]:null;
     const fields=eqFields(s, cjE?{zona:cjE.zona,piso:cjE.piso,bienId:cjE.bienId}:{}, [{k:'cant',l:'Cantidad',t:'number',v:1}, {k:'modo',l:'Si es más de uno',t:'select',opts:[['sep','Un equipo por unidad (se mantienen por separado)'],['grp','Un solo equipo con cantidad (unidades iguales y pequeñas)']]}]);
     fields[0].opts=fields[0].opts.filter(([k])=>k!=='CJ');
     if(cjE) fields.push({k:'quitar',l:'Conjunto «por desglosar»',t:'select',opts:[['si','Eliminarlo al terminar'],['no','Mantenerlo (aún faltan equipos)']],full:true});
     openForm({title:cjE?`Desglosar ${cjE.codigo}`:'Agregar equipos', wide:true, note:cjE?`Los equipos nuevos quedan respaldados por el mismo AF (${esc(afLabel(S.data.bienes[cjE.bienId]))}).`:'Para varias unidades iguales, se generan códigos correlativos; luego completa la ubicación de cada una con «Editar».', fields,
-      submit:async v=>{ const n=Math.max(1,Math.min(100,Math.round(v.cant||1))); let bid=null; if(v.af){ const b=findAF(v.af); if(!b) return {error:`No encontré el AF ${v.af}.`}; bid=b.id; }
+      submit:async v=>{ const n=Math.max(1,Math.min(100,Math.round(v.cant||1))); let bid=null; if(v.af){ const sel=respaldoSistema(v.af,cjE?.bienId);if(sel.error)return sel;bid=sel.b.id; }
         const tipoN=eqTipos(s.tipo)[v.tipoEq]; const nombre=v.nombre||tipoN; const comps=(v.componentes||'').split('\n').map(x=>x.trim()).filter(Boolean);
         const base=nextEqBase(sisId,v.tipoEq); const one=(n===1||v.modo==='grp');
         const docs=one?[{codigo:eqCode(base,0),nombre,cantidad:n>1?n:undefined}]:Array.from({length:n},(_,i)=>({codigo:eqCode(base,i),nombre:`${nombre} ${String(base.max+1+i).padStart(2,'0')}`}));
         const tasks=docs.map(d=>()=>crearEquipo(JSON.parse(JSON.stringify({sistemaId:sisId,tipoEq:v.tipoEq,...d,zona:v.zona,piso:v.piso,ambiente:v.ambiente,marca:v.marca,modelo:v.modelo,serie:one?v.serie:'',capacidad:v.capacidad,bienId:bid,componentes:comps})), cjE?`Desglose de ${cjE.codigo}`:''));
         await runMany(tasks,4,(d,t)=>modalProgress(`Creando equipos: ${d} de ${t}…`));
         if(cjE && v.quitar==='si') await del('equipos',preset.cj);
-        toast(`${docs.length} ${docs.length===1?'equipo creado':'equipos creados'}: ${docs[0].codigo}${docs.length>1?' a '+docs[docs.length-1].codigo:''}.`); } }); },
+        toast(`${docs.length} ${docs.length===1?'equipo creado':'equipos creados'}: ${docs[0].codigo}${docs.length>1?' a '+docs[docs.length-1].codigo:''}.`); } }); controlRespaldoSistema(cjE?.bienId); },
   eDesglosar(id){ const e=S.data.equipos[id]; SIS_ACT.eAgregar(e.sistemaId, null, {cj:id}); },
   eEditar(id){ const e=S.data.equipos[id]; const s=S.data.sistemas[e.sistemaId]||{tipo:'OTRO'};
     const fields=eqFields(s,e,[{k:'cant',l:'Cantidad',t:'number',v:e.cantidad||1}]); fields.push({k:'notas',l:'Notas',t:'textarea',full:true,v:e.notas});
     openForm({title:`Editar ${e.codigo}`, wide:true, note:`El código no cambia aunque cambies el tipo. <button type="button" class="btn sm danger" data-act="eEliminar" data-id="${esc(id)}" style="margin-left:6px">Eliminar equipo</button>`, fields,
-      submit:async v=>{ let bid=null; if(v.af){ const b=findAF(v.af); if(!b) return {error:`No encontré el AF ${v.af}.`}; bid=b.id; }
+      submit:async v=>{ let bid=null; if(v.af){ const sel=respaldoSistema(v.af,e.bienId);if(sel.error)return sel;bid=sel.b.id; }
         const f={tipoEq:v.tipoEq,nombre:v.nombre||eqTipos(s.tipo)[v.tipoEq],cantidad:v.cant>1?Math.round(v.cant):null,zona:v.zona,piso:v.piso,ambiente:v.ambiente,marca:v.marca,modelo:v.modelo,serie:v.serie,capacidad:v.capacidad,bienId:bid,componentes:(v.componentes||'').split('\n').map(x=>x.trim()).filter(Boolean),notas:v.notas};
         const ch=Object.keys(f).filter(k=>JSON.stringify(f[k]??'')!==JSON.stringify(e[k]??(k==='componentes'?[]:'')));
         if(!ch.length) return; await eqPatch(id,f, ev('Equipo editado','Campos: '+ch.join(', '))); toast('Equipo actualizado.'); } });
-    attachSug('ff-af','af'); },
+    controlRespaldoSistema(e.bienId); },
   eEliminar(id){ const e=S.data.equipos[id]; confirmBox('Eliminar equipo', `Se eliminará ${e.codigo} · ${e.nombre}. El AF de respaldo no se modifica.`, 'Eliminar', async ()=>{ await del('equipos',id); toast('Equipo eliminado.'); }); },
   eEstado(id){ const e=S.data.equipos[id]; openForm({title:`Estado de ${e.codigo}`, note:esc(e.nombre), fields:[F.oper(e.oper==='No probado'?'Operativo':e.oper), F.condicion(e.condicion==='Por evaluar'?'Bueno':e.condicion), {k:'obs',l:'Observación',t:'textarea',full:true,req:true}],
     submit:async v=>{ await eqPatch(id,{oper:v.oper,condicion:v.condicion}, ev('Cambio de estado', `${e.oper||'—'} → ${v.oper}; conservación ${e.condicion||'—'} → ${v.condicion}. ${v.obs}`)); toast('Estado actualizado.'); } }); },
@@ -1663,7 +1815,7 @@ function gruposHtml(L,L0,rowOf,open,resOf){
   arr.sort((a,b)=>mode==='cr'?(crOrden(a.k)-crOrden(b.k)||crNum(a.k)-crNum(b.k)||a.k.localeCompare(b.k)):(b.all.length-a.all.length||a.k.localeCompare(b.k,'es',{numeric:true})));
   S._gk=arr.map(g=>g.k); const lim=S.tglim||40; const shown=arr.slice(0,lim);
   const out=shown.map((g,i)=>{ const pend=g.all.filter(x=>resOf(x)==='Pendiente').length; const ver=g.all.length-pend; const isOpen=S.tOpen&&S.tOpen[g.k];
-    const head=`<tr class="grp gr"><td colspan="5" class="w"><div class="ghead"><button type="button" class="btn link gtog" data-act="gToggle" data-i="${i}" aria-expanded="${!!isOpen}"><span aria-hidden="true">${isOpen?'▾':'▸'}</span> <b>${esc(g.k)}</b></button><span class="small muted num">${ver} de ${g.all.length} verificados${pend?` · ${pend} por verificar`:''}</span>${open&&pend?`<span class="row ro-hide gacts"><button class="btn sm primary" data-act="gTodos" data-i="${i}">Encontrados (${pend})</button><button class="btn sm" data-act="gCant" data-i="${i}">Registrar cantidad…</button></span>`:''}</div></td></tr>`;
+    const head=`<tr class="grp gr"><td colspan="5" class="w"><div class="ghead"><button type="button" class="btn link gtog" data-act="gToggle" data-i="${i}" aria-expanded="${!!isOpen}"><span aria-hidden="true">${isOpen?'▾':'▸'}</span> <b>${esc(g.k)}</b></button><span class="small muted num">${ver} de ${g.all.length} verificados${pend?` · ${pend} por verificar`:''}</span>${open&&pend?`<details class="menu right ro-hide gacts"><summary class="btn sm" aria-label="Acciones del grupo ${esc(g.k)}">⋯</summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="gTodos" data-i="${i}">Marcar encontrados… (${pend} por verificar)</button><button class="mi" role="menuitem" data-act="gCant" data-i="${i}">Registrar cantidad…</button></div></details>`:''}</div></td></tr>`;
     return head+(isOpen?g.vis.slice(0,300).map(rowOf).join(''):''); }).join('');
   return out+(arr.length>lim?`<tr><td colspan="5" class="w" style="text-align:center"><button class="btn sm" data-act="gMas">Ver más grupos (${arr.length-lim} más)</button></td></tr>`:'');
 }
@@ -1673,7 +1825,7 @@ Object.assign(ACT,{
   tGrupo(_,el){ S.tGroup=el.value; S.tOpen={}; S.tglim=40; render(); },
   gToggle(i){ const k=(S._gk||[])[Number(i)]; S.tOpen=S.tOpen||{}; S.tOpen[k]=!S.tOpen[k]; render(); },
   gMas(){ S.tglim=(S.tglim||40)+40; render(); },
-  gTodos(i){const {pend}=grupoMiembros(i);const ids=pend.map(id=>S.data.bienes[id].idEtq).filter(n=>n!=null);if(!ids.length){toast('Carga primero los ID desde la V3.');return;}registrarIDsModal(rangoIds(ids));},
+  gTodos(i){if(!S.here.piso&&!S.here.ambiente){toast('Elige primero «Dónde estoy».');S.hereOpen=true;render();return;}const {pend}=grupoMiembros(i);const ids=pend.map(id=>S.data.bienes[id].idEtq).filter(n=>n!=null);if(!ids.length){toast('Carga primero los ID desde la V3.');return;}registrarIDsModal(rangoIds(ids));},
   gCant(i){const {k,pend}=grupoMiembros(i);const ids=pend.map(id=>S.data.bienes[id].idEtq).filter(n=>n!=null);if(!ids.length){toast('No hay ID pendientes en este grupo. Carga primero la V3.');return;}
    openForm({title:'Registrar cantidad por ACTIVO',note:`<b>${esc(k)}</b><br>Selecciona cuántas etiquetas pegaste. Se propondrán los siguientes ID pendientes en orden; comprueba el rango contra las etiquetas físicas.`,fields:[{k:'n',l:'Cantidad de IDs pendientes',t:'number',v:ids.length,req:true}],ok:'Ver IDs propuestos',submit:async v=>{if(!Number.isSafeInteger(v.n)||v.n<1||v.n>ids.length)return {error:`Indica un entero entre 1 y ${ids.length}.`};setTimeout(()=>registrarIDsModal(rangoIds(ids.slice(0,v.n))),0);}});
   },
@@ -1708,8 +1860,12 @@ async function scan(code){const crudo=String(code||'').trim();if(!crudo)return f
  }
  await marcar(b.id,true);toast(`ID ${b.idEtq||b.codigo}: ${b.nombre}, encontrado.`);return true;
 }
-document.addEventListener('change',e=>{if(e.target.id==='t-prioridad'){S.tPrioridad=e.target.value;render();}if(e.target.id==='t-activo'){S.tActivoFiltro=e.target.value;render();}});
-Object.assign(ACT,{tRegistrarIDs(){registrarIDsModal();}});
+document.addEventListener('change',e=>{if(e.target.id==='b-orden'){S.bOrden=e.target.value;S.lim=PAGE;render();}if(e.target.id==='t-prioridad'){S.tPrioridad=e.target.value;render();}if(e.target.id==='t-activo'){S.tActivoFiltro=e.target.value;render();}});
+Object.assign(ACT,{tRegistrarIDs(){if(!S.here.piso&&!S.here.ambiente){toast('Elige primero «Dónde estoy».');S.hereOpen=true;render();return;}registrarIDsModal();},
+  tFiltros(){ const nF=[S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; S.tFilt=!(S.tFilt??(nF>0)); render(); },
+  tLimpiarF(){ S.tPrioridad='';S.tActivoFiltro='';S.tCR='';S.tq='';S.tlim=PAGE; render(); },
+  hListo(){ S.hereOpen=false; render(); }});
+document.addEventListener('toggle',e=>{ if(e.target.classList&&e.target.classList.contains('regopts')) S.regOpen=e.target.open; },true);
 
 /* ---------- Escritor XLSX (sin librerías) ---------- */
 const XL={
@@ -2001,6 +2157,81 @@ Object.assign(ACT,{
 });
 
 /* ---------- Consolidado para auditoría ---------- */
+/* ---------- Etapa 2.3: exportación relacional, no sustituye al respaldo JSON ---------- */
+XL.ST.fechaHora=23;
+XL.styles=XL.styles.replace('<numFmts count="3">','<numFmts count="4">').replace('</numFmts>','<numFmt numFmtId="167" formatCode="dd/mm/yyyy hh:mm:ss"/></numFmts>').replace('<cellXfs count="23">','<cellXfs count="24">').replace('</cellXfs>','<xf numFmtId="167" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1"/></cellXfs>');
+function fechaNormalizada(v){
+ if(v==null||v==='')return '';
+ if(typeof v==='object'){
+  const seconds=v.seconds??v._seconds;
+  if(seconds!=null)v=new Date(Number(seconds)*1000+Number(v.nanoseconds??v._nanoseconds??0)/1e6).toISOString();
+  else if(v instanceof Date)v=v.toISOString();
+ }
+ const s=String(v),dateOnly=/^\d{4}-\d{2}-\d{2}$/.test(s);
+ if(dateOnly){const ms=Date.parse(s+'T00:00:00Z');return Number.isFinite(ms)?{v:(ms-Date.UTC(1899,11,30))/864e5,s:'fecha'}:s;}
+ const d=new Date(s);if(isNaN(d))return s;
+ const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));
+ return {v:(Date.UTC(+parts.year,+parts.month-1,+parts.day,+parts.hour,+parts.minute,+parts.second)-Date.UTC(1899,11,30))/864e5,s:'fechaHora'};
+}
+function tablasNormalizadas(datos=S.data,usuarios=S.usuarios){
+ const D=structuredClone(datos),U=structuredClone(usuarios||{}),cfg=D.config||{},sheets=[],meta=[];
+ const entries=o=>Object.entries(o||{}).sort(([a],[b])=>a.localeCompare(b,'es',{numeric:true}));
+ const txt=v=>v==null?'':String(v),num=v=>v==null||v===''?'':Number.isFinite(Number(v))?Number(v):txt(v);
+ const cash=v=>({v:num(v),s:'m'}),list=v=>Array.isArray(v)?v.join('\n'):txt(v);
+ const nombre=u=>!u?'':U[u]?.nombre||S.names[u]||(u===S.me?S.myName:'')||'Usuario anterior o sin nombre disponible';
+ const add=(name,heads,rows)=>{sheets.push({name,rows:[heads.map(v=>({v,s:'h'})),...rows],cols:heads.map(h=>/Descripcion|Observacion|Detalle|Componentes/.test(h)?55:24),filter:`A1:${XL.col(heads.length-1)}${rows.length+1}`,freeze:1,sel:name==='Bienes'});meta.push({name,heads,n:rows.length});};
+ const B=entries(D.bienes),T=entries(D.tomas),C=Object.entries(D).filter(([p])=>/^tomas\/[^/]+\/conteos$/.test(p));
+ const rangos=new Set();for(const [id,l]of entries(cfg))if(id.startsWith('toma-r5-'))for(const x of l.prev||[])rangos.add(`${l.toma}/${x.id}/${x.nuevo?.t||''}`);
+ add('Bienes',['BienID','IDEtiqueta','CodigoContable','Descripcion','ActivoNormalizado','Tipo','Categoria','Seccion','Cuenta','Marca','Modelo','Serie','CR','CRNombre','PrioridadCR','CROriginal','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Custodio','Conservacion','Operatividad','Etapa','FechaAdquisicion','ValorHistorico','ValorNeto','UltimaVerificacion','ResultadoUltimaToma','DupRegistro','Creado','Actualizado'],B.map(([id,b])=>[id,num(b.idEtq),txt(b.codCont),b.nombre||'',activoKey(b.nombre),b.tipo||'',b.categoria||'',b.seccion||'',txt(b.cuenta),b.marca||'',b.modelo||'',b.serie||'',txt(b.crToma),b.crTomaNombre||cfg.crPrioridad?.crs?.[b.crToma]?.nombre||'',num(b.prioridadCR),txt(b.crOriginal),b.sede||'',txt(b.piso),b.ambiente||'',b.amb||'',b.cuad||'',b.responsable||'',b.condicion||'',b.oper||'',b.etapa||'',fechaNormalizada(b.fechaAdq),cash(b.valorHist),cash(b.valorNeto),fechaNormalizada(b.inv?.f),b.inv?.r||'',b.dupRegistro?'Sí':'No',fechaNormalizada(b.creado),fechaNormalizada(b.act||b._m)]));
+ add('Historial',['BienID','Fecha','Evento','Detalle','Usuario','TomaID'],B.flatMap(([id,b])=>(b.hist||[]).map(h=>[id,fechaNormalizada(h.t),h.tipo||'',h.det||'',nombre(h.u),h.toma||''])));
+ add('Tomas',['TomaID','Nombre','Estado','Alcance','Inicio','Cierre','Esperados','Encontrados','NoLocalizados','PorConciliar','Sobrantes'],T.map(([id,t])=>{const c=D[`tomas/${id}/conteos`]||{},ids=new Set(t.esperados||[]),n=r=>[...ids].filter(bid=>c[bid]?.r===r||(r==='No localizado'&&t.estado==='cerrada'&&!c[bid])).length;return [id,t.nombre||'',t.estado||'',t.alcance||'',fechaNormalizada(t.creado),fechaNormalizada(t.cierre),ids.size,n('Encontrado'),n('No localizado'),n('Por conciliar'),(t.sobrantes||[]).reduce((n,s)=>n+(Number(s.cant)||1),0)];}));
+ add('Conteos',['TomaID','BienID','IDEtiqueta','Resultado','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Conservacion','Operatividad','Cantidad','Observacion','Usuario','Fecha','Origen','ArchivoOrigen'],C.flatMap(([p,c])=>entries(c).map(([bid,v])=>{const tid=p.split('/')[1];return [tid,bid,num(D.bienes?.[bid]?.idEtq),v.r||'',v.sede||'',txt(v.piso),v.ambiente||'',v.amb||'',v.cuad||'',v.c||'',v.o||'',num(v.cant),v.obs||'',nombre(v.u),fechaNormalizada(v.t),v.imp?'importación':v.origen|| (rangos.has(`${tid}/${bid}/${v.t||''}`)?'rango':'manual (origen no conservado)'),v.imp?(typeof v.imp==='object'?JSON.stringify(v.imp):v.imp):''];})));
+ add('Sobrantes',['TomaID','#','Descripcion','Cantidad','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Ubicacion','Conservacion','Operatividad','Marca','Modelo','Serie','Observacion','Usuario','Fecha','BienesAlta'],T.flatMap(([tid,t])=>(t.sobrantes||[]).map((v,i)=>[tid,i+1,v.d||'',Number(v.cant)||1,v.sede||'',txt(v.piso),v.ambiente||'',v.amb||'',v.cuad||'',v.ub||'',v.c||'',v.o||'',v.marca||'',v.modelo||'',v.serie||'',v.nota||'',nombre(v.u),fechaNormalizada(v.t),list(v.regIds|| (v.reg?[v.reg]:[]))])));
+ add('Mantenimientos',['MantenimientoID','BienID','Tipo','Estado','FechaProgramada','Inicio','FechaReal','Descripcion','Tecnico','PeriodicidadMeses','Costo','Resultado','FueraDeServicio','Usuario','Creado','Actualizado'],entries(D.mantenimientos).map(([id,v])=>[id,v.bienId||'',v.tipo||'',v.estado||'',fechaNormalizada(v.fechaProg),fechaNormalizada(v.inicio),fechaNormalizada(v.fechaReal),v.descripcion||'',v.tecnico||'',num(v.per),cash(v.costo),v.resultado||'',v.fuera?'Sí':'No',nombre(v.u),fechaNormalizada(v.creado),fechaNormalizada(v.act||v._m)]));
+ add('Sistemas',['SistemaID','Tipo','Sede','Nombre','Proveedor','ResponsableTecnico','Notas','Justificacion','Usuario','Creado','Actualizado'],entries(D.sistemas).map(([id,v])=>[id,v.tipo||'',v.sede||'',sisNombre({id,...v}),v.proveedor||'',v.resp||'',v.notas||'',v.justif||'',nombre(v.u),fechaNormalizada(v.creado),fechaNormalizada(v.act||v._m)]));
+ add('Equipos',['EquipoID','SistemaID','BienID','Codigo','Tipo','Nombre','Cantidad','Zona','Piso','Ambiente','Marca','Modelo','Serie','Capacidad','Componentes','Conservacion','Operatividad','Notas','Creado','Actualizado'],entries(D.equipos).map(([id,v])=>[id,v.sistemaId||'',v.bienId||'',v.codigo||'',v.tipoEq||'',v.nombre||'',num(v.cantidad??1),v.zona||'',txt(v.piso),v.ambiente||'',v.marca||'',v.modelo||'',v.serie||'',v.capacidad||'',list(v.componentes),v.condicion||'',v.oper||'',v.notas||'',fechaNormalizada(v.creado),fechaNormalizada(v.act||v._m)]));
+ add('Planos',['PlanoID','Nombre','Piso','Zona','RelacionAspecto','Marco','Orden'],entries(D.planos).map(([id,v])=>[id,v.nombre||'',txt(v.piso),v.zona||'',num(v.ar),v.marco||'',num(v.orden)]));
+ add('Ambientes',['PlanoID','AmbienteID','AmbienteLocalID','Nombre','Zona','x','y','w','h','Alias'],entries(D.planos).flatMap(([id,v])=>(v.ambientes||[]).map(a=>[id,`${id}/${a.id}`,txt(a.id),a.nombre||'',a.zona||'',num(a.x),num(a.y),num(a.w),num(a.h),list(a.alias)])));
+ add('CR',['CR','Nombre','Prioridad'],entries(cfg.crPrioridad?.crs).map(([id,v])=>[txt(id),v.nombre||'',num(v.prioridad)]));
+ add('AliasActivo',['Variante','ActivoNormalizado'],entries(cfg.activoAlias?.alias).map(([id,v])=>[id,txt(v)]));
+ add('Usuarios',['Nombre','Correo','Rol','Estado'],entries(U).map(([id,v])=>[v.nombre||'',v.email||'',v.rol||'',v.activo?'Activo':v.desactivado?'Desactivado':'Pendiente']));
+ const relaciones=[['Historial','BienID','Bienes','BienID'],['Historial','TomaID','Tomas','TomaID'],['Conteos','TomaID','Tomas','TomaID'],['Conteos','BienID','Bienes','BienID'],['Sobrantes','TomaID','Tomas','TomaID'],['Mantenimientos','BienID','Bienes','BienID'],['Equipos','SistemaID','Sistemas','SistemaID'],['Equipos','BienID','Bienes','BienID'],['Ambientes','PlanoID','Planos','PlanoID'],['Bienes','AmbienteID','Ambientes','AmbienteID'],['Conteos','AmbienteID','Ambientes','AmbienteID'],['Sobrantes','AmbienteID','Ambientes','AmbienteID'],['Bienes','CR','CR','CR']];
+ const fallas=[],issue=(tabla,fila,campo,valor,referencia)=>fallas.push({tabla,fila,campo,valor:txt(valor),referencia});
+ for(const [from,col,to,key]of relaciones){const a=sheets.find(s=>s.name===from),b=sheets.find(s=>s.name===to),ai=meta.find(x=>x.name===from).heads.indexOf(col),bi=meta.find(x=>x.name===to).heads.indexOf(key),valid=new Set(b.rows.slice(1).map(r=>txt(r[bi])));a.rows.slice(1).forEach((row,i)=>{const v=txt(row[ai]);if(v&&!valid.has(v))issue(from,i+2,col,v,`${to}.${key}`);});}
+ let sobranteFila=2;T.forEach(([tid,t],i)=>{for(const id of t.esperados||[])if(!D.bienes?.[id])issue('Tomas',i+2,'Esperados',id,'Bienes.BienID');for(const v of t.sobrantes||[]){for(const id of v.regIds||(v.reg?[v.reg]:[]))if(!D.bienes?.[id])issue('Sobrantes',sobranteFila,'BienesAlta',id,'Bienes.BienID');sobranteFila++;}});
+ add('Revisar',['Tabla','Fila','Campo','ValorFaltante','Referencia'],fallas.map(x=>[x.tabla,x.fila,x.campo,x.valor,x.referencia]));
+ const tipo=h=>/^(IDEtiqueta|PrioridadCR|Prioridad|Cantidad|PeriodicidadMeses|Orden|Fila|Esperados|Encontrados|NoLocalizados|PorConciliar|Sobrantes|RelacionAspecto|x|y|w|h|#)$/.test(h)?'Número':/^(ValorHistorico|ValorNeto|Costo)$/.test(h)?'Número, 2 decimales':/^(Fecha.*|Inicio|Cierre|UltimaVerificacion|Creado|Actualizado)$/.test(h)?'Fecha Excel (hora en Lima si corresponde)':'Texto';
+ const aclaracion={BienID:'Clave del documento de bien (código ADM); texto, nunca número.',IDEtiqueta:'ID impreso, entero e inmutable.',AmbienteID:'Clave global PlanoID/AmbienteLocalID. Vacío si solo hay ubicación escrita.',BienesAlta:'Códigos ADM de bienes regularizados, separados por salto de línea.',Origen:'Se usa el origen guardado o el lote de rangos. Los conteos antiguos sin metadatos no permiten distinguir entrada manual y escaneo.',Sobrantes:'Unidades sobrantes de la toma.',Esperados:'Número de bienes del alcance.',CR:'Código de responsabilidad como texto; conserva ceros.',Usuario:'Nombre disponible; nunca se exporta el uid.',Imagen:'Referencia o imagen incorporada como texto. El archivo normalizado no sustituye al respaldo JSON.'};
+ const read=[['Metadato','', '', '', 'Fecha y hora de exportación',fechaNormalizada(nowIso())],['Metadato','','','','Usuario',S.myName||'Usuario local'],['Metadato','','','','Versión','Control de Bienes · Etapa 2.3 · esquema 1'],['Nota','','','','Fechas','Fechas sin hora se conservan; instantes se muestran en America/Lima. Valores originales no se redondean: solo el formato muestra 2 decimales.'],['Nota','','','','Alcance','Tablas del estado cargado. No contiene contraseñas, uid ni datos internos de autenticación. Para restaurar usa el respaldo JSON.'],...meta.map(x=>['Conteo',x.name,'','','Filas de datos',x.n]),...meta.flatMap(x=>x.heads.map(h=>['Campo',x.name,h,tipo(h),aclaracion[h]||h.replace(/([a-z])([A-Z])/g,'$1 $2'), ''])),...relaciones.map(([f,c,t,k])=>['Relación',f,c,'Texto',`${f}.${c} → ${t}.${k}; vacío permitido si no tiene vínculo.`,'']),['Relación','Sobrantes','BienesAlta','Lista de códigos','Cada código → Bienes.BienID','']];
+ for(const h of ['Registro','Hoja','Columna','Tipo','Descripcion','Valor'])read.push(['Campo','Léeme',h,'Texto',h,'']);
+
+ read.push(['Aviso','Revisar','','',`${fallas.length} referencias incompletas, ver Léeme`,fallas.length]);
+ for(const x of fallas)read.push(['Referencia incompleta',x.tabla,x.campo,'Texto',`Fila ${x.fila} → ${x.referencia}`,x.valor]);
+ read.push(['Conteo','Léeme','','','Filas de datos',read.length+1]);
+ add('Léeme',['Registro','Hoja','Columna','Tipo','Descripcion','Valor'],read);sheets.unshift(sheets.pop());
+ return {sheets,fallas};
+}
+
+async function exportarTodoExcel(){
+ try{
+  if(S.mode!=='local'&&S.mode!=='db')throw new Error('Ingresa con una cuenta activa para exportar.');
+  if(Object.values(S.loaded).some(v=>!v))throw new Error('Los datos aún están cargando. Vuelve a exportar cuando termine la carga.');
+  const datos=structuredClone(S.data),usuarios=structuredClone(S.usuarios||{});
+  // Consulta puntual de los conteos completos: las tomas cerradas no tienen escucha permanente.
+  if(FS)for(const tid of Object.keys(datos.tomas||{})){
+   const path=`tomas/${tid}/conteos`,snap=await FS.collection(path).get({source:'server'}),rows={};
+   snap.docs.forEach(doc=>{const v=doc.data();if(!v._del)rows[doc.id]=v;});datos[path]=rows;
+  }
+  const {sheets,fallas}=tablasNormalizadas(datos,usuarios);
+  for(const sh of sheets){if(sh.rows.length>1048576)throw new Error(`La hoja ${sh.name} supera el límite de filas de Excel.`);for(const row of sh.rows)for(const cell of row){const v=cell&&typeof cell==='object'?cell.v:cell;if(typeof v==='string'&&v.length>32767)throw new Error(`La hoja ${sh.name} contiene un texto que supera el límite de Excel (32767 caracteres). No se recortó el texto.`);}}
+  await guardarArchivo(`Control_de_Bienes_Normalizado_${today()}.xlsx`,await xlsxBlob(sheets));
+  const aviso=`${fallas.length} referencias incompletas, ver Léeme`;
+  toast(fallas.length?aviso:'Excel normalizado descargado.');
+  if(fallas.length)openForm({title:'Excel descargado con referencias incompletas',note:`${esc(aviso)}. La hoja «Revisar» detalla tabla, fila, campo y valor faltante. Se conservaron todas las filas.`,fields:[],ok:'Listo',submit:async()=>{}});
+ }catch(e){toast(e.message||'No se pudo generar el Excel.');}
+}
+Object.assign(ACT,{exportarTodoExcel});
+
 async function consolidadoTomaAnterior(t){
   const C=conteos(t.id); const B=S.data.bienes; const esp=new Set(t.esperados||[]); const open=t.estado==='abierta';
   const ids=[...(t.esperados||[]),...Object.keys(C).filter(k=>!esp.has(k))].filter(id=>B[id]);
@@ -2139,6 +2370,7 @@ async function ejecutarImport(v){
 /* ---------- Sugerencias en campos (reemplaza datalist: funciona igual en iOS, Android y escritorio) ---------- */
 function sugSource(key){
   const act=()=>bienes().filter(b=>ACTIVOS.includes(b.etapa)).sort(byCode);
+  if(key==='afSistema')return act().filter(b=>puedeSerSistema(b)||$('#af-otras')?.checked).map(b=>({v:b.codigo||b.codCont,l:`${b.codCont||''} · ${b.nombre}${!puedeSerSistema(b)?' · Categoría no habitual en sistemas':''}`,s:norm([b.codigo,b.codCont,b.nombre].join(' '))}));
   if(key==='af') return act().map(b=>({v:b.codCont||b.codigo,l:`${b.codigo} · ${b.nombre}`,s:norm([b.codigo,b.codCont,b.nombre].join(' '))}));
   if(key==='bcod') return act().map(b=>({v:b.codigo,l:`${b.codCont?b.codCont+' · ':''}${b.nombre}`,s:norm([b.codigo,b.codCont,b.nombre].join(' '))}));
   return distinct(key).map(x=>({v:x,l:'',s:norm(x)}));
@@ -2204,7 +2436,18 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('click',e=>{ document.querySelectorAll('details.menu[open]').forEach(d=>{ if(!d.contains(e.target)) d.removeAttribute('open'); }); },true);
 
 /* ---------- Eventos ---------- */
-const RO_OK=['plOpen','plVolver','tVista','ambFiltro','tAmbQuitar','moreF','clrF','histAll','openSis','sVolver','openBien','closeBien','closeModal','goBienes','goMant','go','mf','tf','openToma','tVolver','copiarBienes','tCopiar','masBienes','masToma'];
+Object.assign(ACT,{
+ igVista(id){S.igVista=id==='iguales';S.f.area='';render();},
+ igCopiar(){igualesCopiar(igualesGrupos());},
+ igAbrir(i){igualesPanel(S.igKeys[Number(i)]);},
+ igGrupoCopiar(){const g=igualesActual();if(g)igualesCopiar([g]);},
+ igFicha(id){$('#modal').close();ACT.openBien(id);},
+ igLote(){igualesLoteModal();},
+ igRevertir(id){igualesReversionModal(id);},
+});
+document.addEventListener('change',e=>{if(e.target.id==='ig-unicos'){S.igUnicos=e.target.checked;render();}});
+
+const RO_OK=['exportarTodoExcel','igVista','igCopiar','igAbrir','igGrupoCopiar','igFicha','plOpen','plVolver','tVista','ambFiltro','tAmbQuitar','moreF','clrF','histAll','openSis','sVolver','openBien','closeBien','closeModal','goBienes','goMant','go','mf','tf','openToma','tVolver','copiarBienes','tCopiar','masBienes','masToma','tFiltros','tLimpiarF','gToggle','gMas','tExcelConsol','tExcelPlantilla','tExcelZebra'];
 document.addEventListener('click', e=>{
   const el=e.target.closest('[data-act]'); if(!el) return;
   const a=el.dataset.act; if(!ACT[a]) return;
@@ -2228,13 +2471,14 @@ document.addEventListener('input', e=>{
   const t=e.target;
   if(t.id==='q'){ S.q=t.value; S.lim=PAGE; clearTimeout(qT); qT=setTimeout(render,180); }
   if(t.id==='tq'){ S.tq=t.value; S.tlim=PAGE; clearTimeout(qT); qT=setTimeout(render,180); }
-  if(t.dataset.here){ S.here[t.dataset.here]=t.value; if(['sede','piso','ambiente'].includes(t.dataset.here)&&!t.dataset.keep){ S.here.amb=''; S.here.cuad=''; S.here.pt=null; S.here.pid=''; } try{ localStorage.setItem('cb-here',JSON.stringify(S.here)); }catch(e){} const hv=$('#hs-v'); if(hv) hv.textContent=hereTxt(); }
+  if(t.dataset.here){ S.here[t.dataset.here]=t.value; if(['sede','piso','ambiente'].includes(t.dataset.here)&&!t.dataset.keep){ S.here.amb=''; S.here.cuad=''; S.here.pt=null; S.here.pid=''; } try{ localStorage.setItem('cb-here',JSON.stringify(S.here)); }catch(e){} const hv=$('#hs-v'); if(hv) hv.textContent=hereLugar(); }
 });
+const hereLugar=()=>`${ubic(S.here)||'Ubicación sin definir'}${cuadDe(S.here)?' · '+cuadDe(S.here):''}`;
 const hereTxt=()=>`${ubic(S.here)||'Ubicación sin definir'}${cuadDe(S.here)?' · '+cuadDe(S.here):''}${S.here.cu?' · '+S.here.cu:''} · ${S.here.c}, ${S.here.o}`;
 document.addEventListener('change', e=>{
   const t=e.target; const map={'f-etapa':'etapa','f-tipo':'tipo','f-ubic':'ubic','f-cond':'cond','f-area':'area','f-verif':'verif','f-grupo':'grupo'};
   if(map[t.id]){ S.f[map[t.id]]=t.value; S.lim=PAGE; render(); return; }
-  if(t.dataset.here){ S.here[t.dataset.here]=t.value; if(['sede','piso','ambiente'].includes(t.dataset.here)&&!t.dataset.keep){ S.here.amb=''; S.here.cuad=''; S.here.pt=null; } try{ localStorage.setItem('cb-here',JSON.stringify(S.here)); }catch(e){} const hv=$('#hs-v'); if(hv) hv.textContent=hereTxt(); }
+  if(t.dataset.here){ S.here[t.dataset.here]=t.value; if(['sede','piso','ambiente'].includes(t.dataset.here)&&!t.dataset.keep){ S.here.amb=''; S.here.cuad=''; S.here.pt=null; } try{ localStorage.setItem('cb-here',JSON.stringify(S.here)); }catch(e){} const hv=$('#hs-v'); if(hv) hv.textContent=hereLugar(); }
   if(t.dataset.hz){ const H=S.here; const v=t.value;
     if(t.dataset.hz==='pl'){ const p=S.data.planos[v]; Object.assign(H,{pid:v,piso:p?String(p.nombre||p.piso):'',sede:p?zonaSede(p.zona):'',cuad:'',pt:null,amb:'',ambiente:''}); S.hAmbOtro=false; }
     if(t.dataset.hz==='zn'){ const p={id:herePid(),...S.data.planos[herePid()]}; const z=zonasDe(p).find(c=>c.n===v); Object.assign(H,{cuad:z?z.n:'',pt:z?[+z.m[0].toFixed(2),+z.m[1].toFixed(2)]:null,amb:'',ambiente:''}); if(z) H.sede=zonaSede(zonaPred(p,z)); S.hAmbOtro=false; }
@@ -2379,7 +2623,7 @@ Object.assign(ACT,{
         setTimeout(()=>openForm({title:'Confirmar importación', danger:ya>0, ok:`Importar ${r.n.toLocaleString('es-PE')} registros`, note:`Respaldo del ${esc(fmtDT(j.fecha))}${j.por?' · '+esc(j.por):''}:<ul style="margin:6px 0 0;padding-left:18px">${r.out.map(([p,k])=>`<li>${esc(p)}: <b>${k.toLocaleString('es-PE')}</b></li>`).join('')}<li>conteos de tomas: <b>${r.nc.toLocaleString('es-PE')}</b></li></ul>${ya?`<br><b>Ya hay ${ya.toLocaleString('es-PE')} bienes en la base.</b> Los que tengan el mismo código se reemplazarán con los del respaldo.`:''}`, fields:[],
           submit:async()=>{ const n=await importarRespaldo(j,(d,t)=>modalProgress(`Importando: ${d.toLocaleString('es-PE')} de ${t.toLocaleString('es-PE')}…`)); toast(`Importados ${n.toLocaleString('es-PE')} registros.`); } }),30); return {keep:true}; } }); },
 });
-function userMenu(){ const s=$('#sync'); if(!s||$('#umenu')) return; s.insertAdjacentHTML('afterend',`<details class="menu right" id="umenu"><summary class="btn sm ghost" title="Tu cuenta">${esc(S.myName||'Mi cuenta')} <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${S.admin?`<button class="mi" role="menuitem" data-act="uUsuarios">Usuarios…</button><button class="mi" role="menuitem" data-act="uImportar">Importar respaldo…</button>`:''}<button class="mi" role="menuitem" data-act="respaldo">Descargar respaldo completo</button><button class="mi" role="menuitem" data-act="uSalir">Cerrar sesión</button></div></details>`); }
+function userMenu(){ const s=$('#sync'); if(!s||$('#umenu')) return; s.insertAdjacentHTML('afterend',`<details class="menu right" id="umenu"><summary class="btn sm ghost" title="Tu cuenta">${esc(S.myName||'Mi cuenta')} <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${S.admin?`<button class="mi" role="menuitem" data-act="uUsuarios">Usuarios…</button><button class="mi" role="menuitem" data-act="uImportar">Importar respaldo…</button>`:''}<button class="mi" role="menuitem" data-act="exportarTodoExcel">Exportar todo a Excel</button><button class="mi" role="menuitem" data-act="respaldo">Descargar respaldo completo</button><button class="mi" role="menuitem" data-act="uSalir">Cerrar sesión</button></div></details>`); }
 
 route();
 (async ()=>{
