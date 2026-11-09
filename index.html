@@ -265,7 +265,7 @@ tr.gr td{background:var(--accent-soft)}
 .chk{display:flex;gap:8px;align-items:flex-start;font-size:14px}
 #t-grp,#t-cr{width:auto;max-width:280px}
 @media (max-width:640px){ #t-grp,#t-cr{max-width:100%;flex:1 1 100%} }
-.hzg{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line,#e5e5e5)}
+.hzg{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line,#e5e5e5)}
 @media (max-width:640px){ .hzg{grid-template-columns:1fr} }
 dialog.modal.wide{width:min(680px,calc(100% - 32px))}
 .m-extra{grid-column:1/-1}
@@ -936,11 +936,12 @@ function vInv(){
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Toma</th><th>Alcance</th><th>Avance</th><th>Por conciliar</th><th>No localizados</th><th>Sobrantes</th><th>Estado</th></tr></thead><tbody>${T.map(t=>{ const p=tomaProg(t); return `<tr class="click" data-act="openToma" data-id="${esc(t.id)}" tabindex="0"><td class="w"><div class="nm">${esc(t.nombre)}</div><div class="small muted">Iniciada ${fmtD(t.creado)}${t.cierre?` · cerrada ${fmtD(t.cierre)}`:''}</div></td><td class="w" data-l="Alcance">${esc(alcanceTxt(t))}</td><td class="grow" style="min-width:140px" data-l="Avance"><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div><div class="small muted num">${p.ver??p.ok} de ${p.tot}</div></td><td class="num" data-l="Por conciliar">${p.conc}</td><td class="num" data-l="No localiz.">${p.nol}</td><td class="num" data-l="Sobrantes">${(t.sobrantes||[]).length}</td><td>${t.estado==='abierta'?chip('En curso','c-warn'):chip('Cerrada','c-ok')}</td></tr>`; }).join('') || `<tr><td colspan="7" class="empty">Aún no hay tomas de inventario.</td></tr>`}</tbody></table></div></div>`;
 }
 function hereUbic(){ const P=planos().filter(x=>x.marco); if(!P.length||S.hManual) return ''; const H=S.here; const pid=herePid(); const p=pid?{id:pid,...S.data.planos[pid]}:null;
-  const Z=p?zonasDe(p):[]; const z=Z.find(c=>c.n===H.cuad)||null; const A=z?ambsEnZona(p,z):[]; const aid=H.amb&&String(H.amb).startsWith(pid+'/')?String(H.amb).split('/')[1]:'';
-  const otro=z&&!aid&&H.ambiente?'__otro':(S.hAmbOtro?'__otro':'');
+  const A=[...(p?.ambientes||[])].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{numeric:true,sensitivity:'base'})); const aid=H.amb&&String(H.amb).startsWith(pid+'/')?String(H.amb).split('/')[1]:'';
+  const clave=a=>norm(a.nombre).replace(/\s+/g,' '),repetidos=new Map(); A.forEach(a=>repetidos.set(clave(a),(repetidos.get(clave(a))||0)+1));
+  const etiqueta=a=>repetidos.get(clave(a))>1?`${a.nombre} — ${zonaCorta(a.zona||p.zona)} — ${cuadOf(+(a.x+a.w/2).toFixed(2),+(a.y+a.h/2).toFixed(2))||'Sin cuadrante'}`:a.nombre;
+  const otro=p&&!A.some(a=>a.id===aid)&&(H.ambiente||S.hAmbOtro);
   return `<div class="hzg"><div class="fld"><label for="h-pl">Piso</label><select class="inp" id="h-pl" data-hz="pl"><option value="">Elige el piso…</option>${P.map(x=>`<option value="${esc(x.id)}" ${x.id===pid?'selected':''}>${esc(planoNombre(x))}</option>`).join('')}</select></div>
-  <div class="fld"><label for="h-zn">Cuadrante / zona</label><select class="inp" id="h-zn" data-hz="zn" ${p?'':'disabled'}><option value="">${p?'Elige la zona…':'Primero elige el piso'}</option>${Z.map(c=>`<option value="${esc(c.n)}" ${z&&c.n===z.n?'selected':''}>${esc(c.n)}</option>`).join('')}</select>${p&&Z.length?`<span class="help"><button type="button" class="btn link small" data-act="plElegir">Ver las zonas en el plano</button></span>`:''}</div>
-  ${z?`<div class="fld"><label for="h-am">Ambiente / ubicación física</label><select class="inp" id="h-am" data-hz="am"><option value="">Sin ambiente (solo la zona)</option>${A.map(o=>`<option value="${esc(o.a.id)}" ${o.a.id===aid?'selected':''}>${esc(o.a.nombre)}</option>`).join('')}<option value="__otro" ${otro?'selected':''}>Otro (escribir)…</option></select></div>${otro?`<div class="fld"><label for="h-amb">Describe la ubicación</label><input class="inp" id="h-amb" data-here="ambiente" data-keep="1" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: pasillo junto a las aulas"></div>`:''}`:''}</div>`; }
+  <div class="fld"><label for="h-am">Ambiente</label><select class="inp" id="h-am" data-hz="am" ${p?'':'disabled'}><option value="">${p?'Elige el ambiente…':'Primero elige el piso'}</option>${A.map(a=>`<option value="${esc(a.id)}" ${a.id===aid?'selected':''}>${esc(etiqueta(a))}</option>`).join('')}${p?`<option value="__otro" ${otro?'selected':''}>Otro (escribir)…</option>`:''}</select></div>${otro?`<div class="fld"><label for="h-amb">Describe la ubicación</label><input class="inp" id="h-amb" data-here="ambiente" data-keep="1" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: pasillo junto a las aulas"></div>`:''}</div>`; }
 function vToma(id){
   const t={id,...S.data.tomas[id]}; const anual=esAnual(t); const open=t.estado==='abierta'&&(!anual||(S.anCR&&S.anCR!==SIN_CR&&estadoCR(t,S.anCR)==='abierta')); const C=conteos(id); const p=anual&&S.anCR?avanceCR(t,S.anCR):tomaProg(t);
   const espSet=new Set(t.esperados||[]);
@@ -982,7 +983,7 @@ function vToma(id){
       <div class="fld"><label for="h-piso">Piso</label><input class="inp" id="h-piso" data-here="piso" value="${esc(H.piso)}" placeholder="Ej.: 2"></div>
       <div class="fld"><label for="h-amb">Ambiente</label><input class="inp" id="h-amb" data-here="ambiente" data-sug="ambiente" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: Almacén 4.º piso"><div class="sug" hidden></div></div>`:''}
     </div>
-    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-act="plElegir">${planos().some(x=>x.marco)?'Tocar mi ubicación en el plano':'Elegir ambiente en el plano'}</button>${planos().some(x=>x.marco)?`<button type="button" class="btn sm ghost" data-act="hManual">${S.hManual?'Usar piso, zona y ambiente':'Escribir la ubicación a mano'}</button>`:''}<button type="button" class="btn sm" data-act="hListo">Listo</button></div></details></div>
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-act="plElegir">${planos().some(x=>x.marco)?'Tocar mi ubicación en el plano':'Elegir ambiente en el plano'}</button>${planos().some(x=>x.marco)?`<button type="button" class="btn sm ghost" data-act="hManual">${S.hManual?'Usar piso y ambiente':'Escribir la ubicación a mano'}</button>`:''}<button type="button" class="btn sm" data-act="hListo">Listo</button></div></details></div>
    <div class="card regcard"><h3>2. Registrar</h3>
     <div class="regrow"><form class="scan" data-form="scan"><input class="inp" id="scan" type="search" enterkeyhint="search" value="${esc(S.scanQ||'')}" placeholder="ID, código o descripción" autocomplete="off" autocapitalize="off" aria-label="ID, código o descripción del bien encontrado"></form><button class="btn primary" data-act="tRegistrarIDs">Registrar IDs (rango)</button></div>
     <div id="scanres" class="scanres" hidden></div>
@@ -2583,14 +2584,12 @@ document.addEventListener('change', e=>{
   const t=e.target; const map={'f-etapa':'etapa','f-tipo':'tipo','f-ubic':'ubic','f-cond':'cond','f-area':'area','f-verif':'verif','f-grupo':'grupo'};
   if(map[t.id]){ S.f[map[t.id]]=t.value; S.lim=PAGE; render(); return; }
   if(t.dataset.here){ S.here[t.dataset.here]=t.value; if(['sede','piso','ambiente'].includes(t.dataset.here)&&!t.dataset.keep){ S.here.amb=''; S.here.cuad=''; S.here.pt=null; } try{ localStorage.setItem('cb-here',JSON.stringify(S.here)); }catch(e){} const hv=$('#hs-v'); if(hv) hv.textContent=hereLugar(); }
-  if(t.dataset.hz){ const H=S.here; const v=t.value;
+  if(t.dataset.hz){ try{ t.focus({preventScroll:true}); }catch(_){} const H=S.here; const v=t.value;
     if(t.dataset.hz==='pl'){ const p=S.data.planos[v]; Object.assign(H,{pid:v,piso:p?String(p.nombre||p.piso):'',sede:p?zonaSede(p.zona):'',cuad:'',pt:null,amb:'',ambiente:''}); S.hAmbOtro=false; }
-    if(t.dataset.hz==='zn'){ const p={id:herePid(),...S.data.planos[herePid()]}; const z=zonasDe(p).find(c=>c.n===v); Object.assign(H,{cuad:z?z.n:'',pt:z?[+z.m[0].toFixed(2),+z.m[1].toFixed(2)]:null,amb:'',ambiente:''}); if(z) H.sede=zonaSede(zonaPred(p,z)); S.hAmbOtro=false; }
-    if(t.dataset.hz==='am'){ const pid=herePid(); const p={id:pid,...S.data.planos[pid]}; const z=zonasDe(p).find(c=>c.n===H.cuad);
-      if(v==='__otro'){ Object.assign(H,{amb:'',ambiente:''}); S.hAmbOtro=true; }
-      else if(!v){ Object.assign(H,{amb:'',ambiente:''}); S.hAmbOtro=false; if(z){ H.pt=[+z.m[0].toFixed(2),+z.m[1].toFixed(2)]; H.sede=zonaSede(zonaPred(p,z)); } }
-      else { const o=z&&ambsEnZona(p,z).find(x=>x.a.id===v); if(o){ const b=o.box; Object.assign(H,{amb:`${pid}/${v}`,ambiente:o.a.nombre,sede:zonaSede(o.a.zona||p.zona),pt:[+((b.x0+b.x1)/2).toFixed(2),+((b.y0+b.y1)/2).toFixed(2)]}); } S.hAmbOtro=false; } }
-    guardaHere(); try{ t.focus({preventScroll:true}); }catch(_){} render(); setTimeout(()=>{ const n=t.dataset.hz==='pl'?'#h-zn':t.dataset.hz==='zn'?'#h-am':(S.hAmbOtro?'#h-amb':'#scan'); $(n)?.focus(); },30); }
+    if(t.dataset.hz==='am'){ const pid=herePid(); const p=S.data.planos[pid];
+      Object.assign(H,{amb:'',ambiente:'',cuad:'',pt:null,sede:p?zonaSede(p.zona):''}); S.hAmbOtro=v==='__otro';
+      const a=(p?.ambientes||[]).find(a=>a.id===v); if(a){ const pt=[+(a.x+a.w/2).toFixed(2),+(a.y+a.h/2).toFixed(2)]; Object.assign(H,{amb:`${pid}/${v}`,ambiente:a.nombre,sede:zonaSede(a.zona||p.zona),cuad:p.marco?cuadOf(...pt):'',pt:p.marco?pt:null}); S.hAmbOtro=false; } }
+    guardaHere(); render(); setTimeout(()=>{ const n=t.dataset.hz==='pl'?'#h-am':(S.hAmbOtro?'#h-amb':'#scan'); $(n)?.focus(); },30); }
 });
 document.addEventListener('toggle',e=>{ if(e.target.classList&&e.target.classList.contains('herebox')) S.hereOpen=e.target.open; },true);
 function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario'].includes(h)?h:'resumen'; render(); }
