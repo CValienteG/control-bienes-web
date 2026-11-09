@@ -597,6 +597,7 @@ function exigirEscritura(){ if(S.readonly) throw errorPermiso('Tienes acceso de 
 function exigirAdmin(){ exigirEscritura(); if(!S.admin) throw errorPermiso('Solo un administrador puede realizar esta acción.'); }
 function exigirLote(n){ exigirEscritura(); if(n>=100) exigirAdmin(); }
 function permisoDocumento(path,id,d){
+  if(path==='bienes'){const inv=S.data.bienes[id]?.inv,t=S.data.tomas[inv?.tomaId];if(inv?.cierreCR&&t?.crEstados?.[inv.cr]?.op===inv.cierreCR&&['cerrando','revirtiendo'].includes(estadoCR(t,inv.cr)))throw new Error('Esta ficha está en un cierre por CR. Espera a que termine para editarla.');}
   if(path==='tomas'&&(!d||'cierre' in d||'uCierre' in d||d.estado==='cerrada')) exigirAdmin();
   if(path==='config'&&/^(activoAlias$|crPrioridad$|sistemasCategorias$|activo-alias-prev-|toma-r1-|toma-r3-|toma-eliminada-)/.test(id)) exigirAdmin();
 }
@@ -604,8 +605,8 @@ function aplicarPermisos(){
   document.querySelectorAll('[data-act]').forEach(el=>{ if(ADMIN_ACT.has(el.dataset.act)) el.hidden=!S.admin||S.readonly; });
   document.querySelectorAll('[data-admin]').forEach(el=>el.hidden=!S.admin||S.readonly);
 }
-function usuariosRecientes(tid,ahora=Date.now()){
-  const U=new Map(); for(const c of Object.values(conteos(tid))){ const ms=Date.parse(c.t); if(c.u&&ms<=ahora&&ms>ahora-600000&&(!U.has(c.u)||U.get(c.u).ms<ms)) U.set(c.u,{u:c.u,ms,lugar:ubic(c)||'sin ubicación'}); }
+function usuariosRecientes(tid,ahora=Date.now(),cr=null){
+  const U=new Map(); for(const [id,c] of Object.entries(conteos(tid))){if(cr&&crFijo(S.data.tomas[tid],id)!==cr)continue; const ms=Date.parse(c.t); if(c.u&&ms<=ahora&&ms>ahora-600000&&(!U.has(c.u)||U.get(c.u).ms<ms)) U.set(c.u,{u:c.u,ms,lugar:ubic(c)||'sin ubicación'}); }
   return [...U.values()].sort((a,b)=>who(a.u).localeCompare(who(b.u),'es'));
 }
 function actividadHtml(tid){ const L=usuariosRecientes(tid); return `<div class="small muted" data-online title="Actividad registrada en los últimos 10 minutos">En línea: ${L.length?L.map(x=>esc(who(x.u))).join(' · '):'sin actividad reciente'}</div>`; }
@@ -626,8 +627,10 @@ async function escribirConteo(path,bid,datos,{anterior=null}={}){
   const decidir=(t,raw)=>{
     exigirEscritura(); const actual=limpioConteo(raw);
     if(!t||t._del||t.estado!=='abierta')throw new Error('La toma ya no está abierta.');
+    validarRegistroCR(t,bid);
     if(versionConteo(actual)!==esperado)return {conflicto:true,actual};
-    return {dato:nuevo?{...nuevo,...(actual?{prev:actual}:{})}:null};
+    const cr=esAnual(t)?crFijo(t,bid):null;
+    return {dato:nuevo?{...nuevo,...(actual?{prev:actual}:{})}:null,...(cr?{crEditado:cr,crEstados:{...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}}}:{})};
   };
   const resultado=await queue(path+'/'+bid,async()=>{
     if(!DB)return decidir(S.data.tomas[tid],colObj(path)[bid]);
@@ -636,7 +639,7 @@ async function escribirConteo(path,bid,datos,{anterior=null}={}){
       const tr=DB.doc('tomas/'+tid),cr=DB.doc(path+'/'+bid);
       const [ts,cs]=await Promise.all([tx.get(tr),tx.get(cr)]);
       const r=decidir(ts.exists?ts.data():null,cs.exists?cs.data():null);
-      if(!r.conflicto)tx.set(cr,r.dato||{_del:true});
+      if(!r.conflicto){tx.set(cr,r.dato||{_del:true});if(r.crEstados)tx.update(tr,{crEstados:r.crEstados,crEditado:r.crEditado});}
       return r;
     });
   }).catch(e=>{if(['unavailable','deadline-exceeded','failed-precondition'].includes(e.code))throw new Error('No se guardó el conteo. Para evitar sobrescribir a otra persona, necesitas conexión. Vuelve a intentarlo cuando se restablezca.');throw e;});
@@ -644,6 +647,7 @@ async function escribirConteo(path,bid,datos,{anterior=null}={}){
     const actual=resultado.actual; if(actual)colObj(path)[bid]=actual;else delete colObj(path)[bid];render();
     throw Object.assign(new Error(`Ya registrado por ${actual?who(actual.u):'otra persona'} en ${actual?ubic(actual)||'sin ubicación':'un registro que cambió'}.`),{code:'conteo-conflict',tid,bid,actual,propuesto:nuevo});
   }
+  if(resultado.crEstados){S.data.tomas[tid].crEstados=resultado.crEstados;S.data.tomas[tid].crEditado=resultado.crEditado;}
   if(resultado.dato)colObj(path)[bid]=resultado.dato;else delete colObj(path)[bid];render();return resultado.dato;
 }
 function mostrarConflicto(e){
@@ -672,7 +676,7 @@ function distinct(field){ const key=Object.keys(S.data.bienes).length+'|'+(S._ve
 function nextCode(tipo){ const p=(tipo||'AF')+'-'; let max=0; bienes().forEach(b=>{ if(b.codigo && b.codigo.toUpperCase().startsWith(p)){ const n=parseInt(b.codigo.slice(p.length),10); if(n>max) max=n; } }); return p+String(max+1).padStart(4,'0'); }
 function mEstado(m){ if(m.estado==='programado' && m.fechaProg && m.fechaProg < today()) return 'vencido'; return m.estado; }
 function bienLabel(b){ return b ? `${b.codigo? b.codigo+' · ':''}${b.nombre||'Sin nombre'}` : 'Bien eliminado'; }
-function tomaProg(t){ if(t.estado==='cerrada' && t.resumen) return {ok:t.resumen.enc+t.resumen.conc, tot:t.resumen.tot, ...t.resumen}; const c=conteos(t.id); const esp=t.esperados||[]; let enc=0,conc=0,nol=0; esp.forEach(id=>{ const r=c[id]?.r; if(r==='Encontrado') enc++; else if(r==='Por conciliar') conc++; else if(r==='No localizado') nol++; }); return {ok:enc+conc, ver:enc+conc+nol, enc, conc, nol, tot:esp.length}; }
+function tomaProg(t){ if(esAnual(t))return avanceCR(t); if(t.estado==='cerrada' && t.resumen) return {ok:t.resumen.enc+t.resumen.conc, tot:t.resumen.tot, ...t.resumen}; const c=conteos(t.id); const esp=t.esperados||[]; let enc=0,conc=0,nol=0; esp.forEach(id=>{ const r=c[id]?.r; if(r==='Encontrado') enc++; else if(r==='Por conciliar') conc++; else if(r==='No localizado') nol++; }); return {ok:enc+conc, ver:enc+conc+nol, enc, conc, nol, tot:esp.length}; }
 
 /* ---------- Render ---------- */
 let rq=false;
@@ -938,10 +942,11 @@ function hereUbic(){ const P=planos().filter(x=>x.marco); if(!P.length||S.hManua
   <div class="fld"><label for="h-zn">Cuadrante / zona</label><select class="inp" id="h-zn" data-hz="zn" ${p?'':'disabled'}><option value="">${p?'Elige la zona…':'Primero elige el piso'}</option>${Z.map(c=>`<option value="${esc(c.n)}" ${z&&c.n===z.n?'selected':''}>${esc(c.n)}</option>`).join('')}</select>${p&&Z.length?`<span class="help"><button type="button" class="btn link small" data-act="plElegir">Ver las zonas en el plano</button></span>`:''}</div>
   ${z?`<div class="fld"><label for="h-am">Ambiente / ubicación física</label><select class="inp" id="h-am" data-hz="am"><option value="">Sin ambiente (solo la zona)</option>${A.map(o=>`<option value="${esc(o.a.id)}" ${o.a.id===aid?'selected':''}>${esc(o.a.nombre)}</option>`).join('')}<option value="__otro" ${otro?'selected':''}>Otro (escribir)…</option></select></div>${otro?`<div class="fld"><label for="h-amb">Describe la ubicación</label><input class="inp" id="h-amb" data-here="ambiente" data-keep="1" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: pasillo junto a las aulas"></div>`:''}`:''}</div>`; }
 function vToma(id){
-  const t={id,...S.data.tomas[id]}; const open=t.estado==='abierta'; const C=conteos(id); const p=tomaProg(t);
+  const t={id,...S.data.tomas[id]}; const anual=esAnual(t); const open=t.estado==='abierta'&&(!anual||(S.anCR&&S.anCR!==SIN_CR&&estadoCR(t,S.anCR)==='abierta')); const C=conteos(id); const p=anual&&S.anCR?avanceCR(t,S.anCR):tomaProg(t);
   const espSet=new Set(t.esperados||[]);
-  let L=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!espSet.has(k))].map(bid=>({id:bid, b:S.data.bienes[bid]||{}, c:C[bid], fuera:!espSet.has(bid)}));
-  const resOf = x => x.c?.r || (open?'Pendiente':'No localizado');
+  let L=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!espSet.has(k))].map(bid=>({id:bid, b:anual?{...S.data.bienes[bid],crToma:crFijo(t,bid),crTomaNombre:nombreCR(crFijo(t,bid)).split(' — ').slice(1).join(' — ')}:S.data.bienes[bid]||{}, c:C[bid], fuera:!espSet.has(bid)}));
+  if(anual&&S.anCR)L=L.filter(x=>crFijo(t,x.id)===S.anCR);
+  const resOf = x => anual?resultadoAnual(t,x.id,C):x.c?.r || (open?'Pendiente':'No localizado');
   const L0=L; const CRS=[...new Set(L0.map(x=>crDe(x.b)))].sort((a,b)=>crOrden(a)-crOrden(b)||crNum(a)-crNum(b)||a.localeCompare(b));
   if(S.tCR) L=L.filter(x=>crDe(x.b)===S.tCR);
   if(S.tPrioridad)L=L.filter(x=>String(x.b.prioridadCR)===S.tPrioridad);
@@ -955,18 +960,19 @@ function vToma(id){
   const dl=(id,arr)=>`<datalist id="${id}">${arr.map(o=>`<option value="${esc(o)}">`).join('')}</datalist>`;
   const rowOf=x=>{ const b=x.b; const c=x.c; const r=resOf(x);
     const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}<div class="small muted">Registrado por ${esc(nameOf(c.u)||'Registro inicial')}</div>` : '';
-    const acts = !open ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
-    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
+    const acts = (!open||(anual&&estadoCR(t,crFijo(t,x.id))!=='abierta')) ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
+    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(anual?nombreCR(crFijo(t,x.id)):b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
   const rows=S.tGroup?gruposHtml(L,L0.filter(x=>(!S.tCR||crDe(x.b)===S.tCR)&&(!S.tPrioridad||String(x.b.prioridadCR)===S.tPrioridad)&&(!S.tActivoFiltro||activoKey(x.b.nombre)===S.tActivoFiltro)),rowOf,open,resOf):shown.map(rowOf).join('');
-  const sob=(t.sobrantes||[]);
+  const sob=(t.sobrantes||[]).filter(s=>!anual||!S.anCR||(s.cr||SIN_CR)===S.anCR);
   const tf=[['pendientes','Por verificar'],['verificados','Verificados'],['conciliar','Por conciliar'],['todos','Todos']].map(([k,l])=>`<button data-act="tf" data-tf="${k}" aria-pressed="${S.tf===k}">${l} <span class="num">${cnt[k]}</span></button>`).join('');
   const H=S.here;
   const tablaHtml=`<div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>ID / código</th><th>Bien</th><th class="hide-sm">Área (CR)</th><th>Resultado</th><th></th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="empty">${S.tf==='pendientes'&&!q?'Todos los bienes de esta toma ya fueron verificados.':'Sin bienes en esta lista.'}</td></tr>`}</tbody></table></div></div>
   ${S.tGroup?'':more(shown.length,L.length,'masToma')}
 `;
   return `<div class="row"><button class="btn ghost" data-act="tVolver">← Todas las tomas</button></div>
-  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${open&&S.admin?`<button class="btn ro-hide" data-act="tCerrar">Cerrar toma</button><details class="menu right ro-hide"><summary class="btn" aria-label="Más acciones de la toma">⋯ Más</summary><div class="menu-list" role="menu"><button class="mi danger" role="menuitem" data-act="tEliminar">Eliminar toma…</button></div></details>`:''}</div></div>
+  <div class="row between"><div><h2>${esc(t.nombre)}</h2><div class="small muted">${esc(alcanceTxt(t))} · iniciada ${fmtD(t.creado)}${t.cierre?' · cerrada '+fmtD(t.cierre):''}</div></div><div class="row"><details class="menu right"><summary class="btn">Excel <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tExcelConsol">Consolidado para auditoría (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelPlantilla">Plantilla V3 (.xlsx)</button><button class="mi" role="menuitem" data-act="tExcelZebra">Reimprimir etiquetas Zebra (.xlsx)</button>${open?`<button class="mi ro-hide" role="menuitem" data-act="tExcelImportar">Importar hoja llenada…</button>`:''}<button class="mi" role="menuitem" data-act="tCopiar">Copiar tabla (pegar en Excel)</button></div></details>${t.estado==='abierta'&&S.admin?`<button class="btn ro-hide" data-act="tCerrar">${anual?'Finalizar año':'Cerrar toma'}</button><details class="menu right ro-hide"><summary class="btn" aria-label="Más acciones de la toma">⋯ Más</summary><div class="menu-list" role="menu"><button class="mi danger" role="menuitem" data-act="tEliminar">Eliminar toma…</button></div></details>`:''}</div></div>
   ${(()=>{ const n=open?fichasCierreInterrumpido(t).length:0; return n?`<div class="banner warn"><span class="grow"><b>Un cierre se interrumpió:</b> ${n} fichas quedaron con el resultado de esta toma (por ejemplo «No localizado») aunque la toma sigue abierta.</span><button class="btn sm primary ro-hide" data-act="tRevertir">Revertir esas fichas</button></div>`:''; })()}
+  ${anual?anualHtml(t):t.estado==='abierta'&&S.admin?'<div class="banner"><span class="grow">Conserva esta toma y sus conteos; habilita el avance y cierre por CR.</span><button class="btn" data-act="anAdaptar">Adaptar a toma anual por CR…</button></div>':''}
   ${actividadHtml(id)}
   <div class="card" style="display:grid;gap:10px"><div class="row between small"><span><b class="num">${p.ver??p.ok}</b> de <span class="num">${p.tot}</span> verificados · <span class="num">${p.enc}</span> encontrados · <span class="num">${p.conc}</span> por conciliar · <span class="num">${p.nol}</span> no localizados · <span class="num">${sob.length}</span> sobrantes</span><span class="num">${p.tot?Math.round((p.ver??p.ok)/p.tot*100):0}%</span></div><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div></div>
   ${open?`<div class="tomagrid ro-hide">
@@ -990,7 +996,7 @@ function vToma(id){
   return `<div class="filters revbar"><span class="lbl">Revisar</span>${lista?`<div class="seg" role="group" aria-label="Filtrar">${tf}</div><select class="inp" id="t-grp" data-act-change="tGrupo" aria-label="Agrupar"><option value="">Sin agrupar</option>${Object.entries(GRUPOS).map(([k,l])=>`<option value="${k}" ${S.tGroup===k?'selected':''}>Agrupar: ${esc(l)}</option>`).join('')}</select><button class="btn ${fo?'on':''}" data-act="tFiltros" aria-expanded="${!!fo}">Filtros${nF?` <span class="badge acc">${nF}</span>`:''}</button>`:''}${S.tAmb&&lista?`<button class="fchip" data-act="tAmbQuitar">Ambiente: ${esc(ambDe(S.tAmb)?.a.nombre||'—')} <span aria-hidden="true">✕</span></button>`:''}<div class="seg" role="group" aria-label="Vista" style="margin-left:auto"><button data-act="tVista" data-v="lista" aria-pressed="${lista}">Lista</button><button data-act="tVista" data-v="plano" aria-pressed="${!lista}">Plano</button></div></div>
   ${lista&&fo?`<div class="filters more"><input class="inp search" id="tq" type="search" placeholder="Buscar en esta toma: ID, código o descripción" value="${esc(S.tq)}" aria-label="Buscar en esta toma"><select class="inp" id="t-prioridad" aria-label="Prioridad CR"><option value="">Todas las prioridades CR</option>${[...new Set(L0.map(x=>x.b.prioridadCR).filter(v=>v!=null))].sort((a,b)=>a-b).map(n=>`<option value="${n}" ${String(n)===S.tPrioridad?'selected':''}>Prioridad ${n}</option>`).join('')}</select><select class="inp" id="t-activo" aria-label="Filtrar ACTIVO"><option value="">Todos los ACTIVO</option>${[...new Set(L0.map(x=>activoKey(x.b.nombre)))].sort().map(k=>`<option value="${esc(k)}" ${k===S.tActivoFiltro?'selected':''}>${esc(k)}</option>`).join('')}</select><select class="inp" id="t-cr" aria-label="Filtrar por CR"><option value="">Todos los CR</option>${CRS.map(c=>`<option value="${esc(c)}" ${S.tCR===c?'selected':''}>${esc(c)}</option>`).join('')}</select>${nF?`<button class="btn sm ghost" data-act="tLimpiarF">Limpiar filtros</button>`:''}</div>`:''}`; })()}
   ${S.tView==='plano'?vTomaPlano(t,C):tablaHtml}
-  <div class="card"><div class="card-h"><h3>Sobrantes</h3>${open?`<button class="btn sm ro-hide" data-act="tSobrante">Agregar sobrante</button>`:''}</div><p class="small muted" style="margin:0 0 8px">Bienes encontrados físicamente que no figuran en el registro.</p>${sob.length?`<div class="list">${sob.map((s,i)=>`<div class="li"><div class="grow"><div class="t">${esc(s.d)}${s.cant>1?` <span class="muted">× ${s.cant}</span>`:''}</div><div class="small muted">${esc([s.marca,s.modelo,s.serie&&'S/N '+s.serie].filter(Boolean).join(' · '))}${s.marca||s.modelo||s.serie?' · ':''}${esc(s.ub||'')}${s.nota?' · '+esc(s.nota):''}</div></div>${open?`<button class="btn sm ghost ro-hide" data-act="tSobDel" data-i="${i}">Quitar</button>`:`${s.reg?chip('Registrado','c-ok'):`<button class="btn sm ro-hide" data-act="tSobReg" data-i="${i}">Registrar como bien</button>`}`}</div>`).join('')}</div>`:`<div class="empty small">Sin sobrantes.</div>`}</div>`;
+  ${anual?sobAnualHtml(t):`<div class="card"><div class="card-h"><h3>Sobrantes</h3>${open?`<button class="btn sm ro-hide" data-act="tSobrante">Agregar sobrante</button>`:''}</div><p class="small muted" style="margin:0 0 8px">Bienes encontrados físicamente que no figuran en el registro.</p>${sob.length?`<div class="list">${sob.map((s,i)=>`<div class="li"><div class="grow"><div class="t">${esc(s.d)}${s.cant>1?` <span class="muted">× ${s.cant}</span>`:''}</div><div class="small muted">${esc([s.marca,s.modelo,s.serie&&'S/N '+s.serie].filter(Boolean).join(' · '))}${s.marca||s.modelo||s.serie?' · ':''}${esc(s.ub||'')}${s.nota?' · '+esc(s.nota):''}</div></div>${open?`<button class="btn sm ghost ro-hide" data-act="tSobDel" data-i="${i}">Quitar</button>`:`${s.reg?chip('Registrado','c-ok'):`<button class="btn sm ro-hide" data-act="tSobReg" data-i="${i}">Registrar como bien</button>`}`}</div>`).join('')}</div>`:`<div class="empty small">Sin sobrantes.</div>`}</div>`}`;
 }
 
 /* ---------- Ficha (panel lateral) ---------- */
@@ -1519,6 +1525,7 @@ async function propagarAmb(key, antes, nuevo, p){
   if(L.length) toast(`Ambiente actualizado en ${L.length} ${L.length===1?'ficha':'fichas'}.`);
 }
 function vTomaPlano(t, C){
+  if(esAnual(t)&&S.anCR){const ids=new Set(idsCR(t,S.anCR));C=Object.fromEntries(Object.entries(C).filter(([id])=>ids.has(id)));t={...t,esperados:[...ids]};}
   const P=planos().filter(p=>(p.ambientes||[]).length);
   if(!P.length) return `<div class="card"><p class="hint" style="margin:0">Aún no hay planos con ambientes. Créalos en la pestaña <button class="btn link" data-act="go" data-v="planos">Planos</button>.</p></div>`;
   S.tPl = S.tPl && S.data.planos[S.tPl] ? S.tPl : (S.here.amb?S.here.amb.split('/')[0]:P[0].id);
@@ -1581,6 +1588,7 @@ const EV_CIERRE=['No localizado en inventario','Verificado en inventario','Encon
 const CAMPOS_CIERRE=['amb','cuad','pt','sede','piso','ambiente','ubicacion','responsable','condicion','oper','inv','act'];
 async function cerrarToma(t,{avisados=[]}={}){
   exigirAdmin();
+  if(esAnual(S.data.tomas[t.id]||t))throw new Error('Esta toma anual se cierra por CR; el cierre global está deshabilitado.');
   if(FS){const snap=await FS.collection(`tomas/${t.id}/conteos`).get({source:'server'});const actuales={};for(const doc of snap.docs){const c=limpioConteo(doc.data());if(c)actuales[doc.id]=c;}S.data[`tomas/${t.id}/conteos`]=actuales;}
   const otros=usuariosRecientes(t.id).filter(x=>x.u!==S.me&&!avisados.includes(x.u));
   if(otros.length)return {error:'Hay otras personas contando: '+otros.map(x=>who(x.u)).join(', ')+'. Cancela y vuelve a abrir el cierre para confirmar el aviso.'};
@@ -1605,7 +1613,7 @@ async function cerrarToma(t,{avisados=[]}={}){
   S.tf='todos'; toast(r.fail?`Toma cerrada, pero ${r.fail} fichas no se pudieron actualizar.`:`Toma cerrada: ${res.enc+res.conc} verificados, ${res.nol} no localizados.`);
 }
 /* fichas tocadas por un cierre de esta toma que no llegó a completarse */
-function fichasCierreInterrumpido(t){ if(!t||t.estado!=='abierta') return []; return Object.entries(S.data.bienes||{}).filter(([id,b])=>b.inv&&(b.inv.tomaId?b.inv.tomaId===t.id:b.inv.toma===t.nombre)&&(b.hist||[]).some(e=>EV_CIERRE.includes(e.tipo)&&(e.toma?e.toma===t.id:String(e.det||'').startsWith(t.nombre)))).map(([id])=>id); }
+function fichasCierreInterrumpido(t){ if(!t||esAnual(t)||t.estado!=='abierta') return []; return Object.entries(S.data.bienes||{}).filter(([id,b])=>b.inv&&(b.inv.tomaId?b.inv.tomaId===t.id:b.inv.toma===t.nombre)&&(b.hist||[]).some(e=>EV_CIERRE.includes(e.tipo)&&(e.toma?e.toma===t.id:String(e.det||'').startsWith(t.nombre)))).map(([id])=>id); }
 async function revertirFichas(t,ids,onProg){
   exigirAdmin();
   const tasks=ids.map(id=>async()=>{ const b=S.data.bienes[id]; if(!b) return; const H=[...(b.hist||[])]; let k=-1; for(let i=H.length-1;i>=0;i--){ const e=H[i]; if(EV_CIERRE.includes(e.tipo)&&(e.toma?e.toma===t.id:String(e.det||'').startsWith(t.nombre))){ k=i; break; } } if(k<0) return;
@@ -1657,6 +1665,7 @@ Object.assign(ACT,{ ambNombres(){ if(!planos().some(p=>(p.ambientes||[]).length)
 Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
     cols.forEach(c=>{ out.colecciones[c]=structuredClone(S.data[c]||{}); });
     Object.keys(S.data.tomas||{}).forEach(id=>{ out.colecciones[`tomas/${id}/conteos`]=structuredClone(conteos(id)||{}); });
+    for(const [tid,t]of Object.entries(S.data.tomas||{})){if(!esAnual(t))continue;const path=`tomas/${tid}/actasCR`;out.colecciones[path]=await coleccionCR(path);for(const op of Object.keys(out.colecciones[path]))out.colecciones[`${path}/${op}/filas`]=await coleccionCR(`${path}/${op}/filas`);}
     const n=Object.values(out.colecciones).reduce((a,o)=>a+Object.keys(o).length,0);
     await guardarArchivo(`Respaldo_Control_de_Bienes_${today()}.json`, new Blob([JSON.stringify(out)],{type:'application/json'})); toast(`Respaldo con ${n} registros.`); },
   tEliminar(){ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; if(t.estado!=='abierta'){ toast('Solo se puede eliminar una toma abierta.'); return; }
@@ -1677,6 +1686,7 @@ function scanSearch(q){
   const C=conteos(S.tomaSel); const esp=new Set(t.esperados||[]); const words=n.split(/\s+/).filter(Boolean);
   const groups=new Map();
   for(const b of bienes()){ if(!ACTIVOS.includes(b.etapa)) continue;
+    if(esAnual(t)&&(!Object.hasOwn(t.crPorBien||{},b.id)||estadoCR(t,crFijo(t,b.id))!=='abierta'||(S.anCR&&crFijo(t,b.id)!==S.anCR)))continue;
     const s=norm([b.idEtq,b.nombre,activoKey(b.nombre),b.marca,b.modelo,b.serie,b.codigo,b.codCont,b.area,b.refDoc,b.categoria].join(' '));
     if(/^\d+$/.test(n.replace(/\s/g,''))?Number(b.idEtq)!==Number(n.replace(/\s/g,'')):!words.every(w=>s.includes(w))) continue;
     const key=activoKey(b.nombre);
@@ -1918,7 +1928,7 @@ function gruposHtml(L,L0,rowOf,open,resOf){
   return out+(arr.length>lim?`<tr><td colspan="5" class="w" style="text-align:center"><button class="btn sm" data-act="gMas">Ver más grupos (${arr.length-lim} más)</button></td></tr>`:'');
 }
 function grupoMiembros(i){ const k=(S._gk||[])[Number(i)]; const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const C=conteos(t.id); const ids=[...(t.esperados||[])];
-  return {k, pend:ids.filter(id=>S.data.bienes[id]&&!C[id]&&grupoKey(S.data.bienes[id],S.tGroup)===k).sort((a,b)=>((S.data.bienes[a].idEtq??Infinity)-(S.data.bienes[b].idEtq??Infinity)||a.localeCompare(b,'es',{numeric:true})))}; }
+  return {k, pend:ids.filter(id=>S.data.bienes[id]&&!C[id]&&(!esAnual(t)||(estadoCR(t,crFijo(t,id))==='abierta'&&(!S.anCR||crFijo(t,id)===S.anCR)))&&grupoKey(esAnual(t)?{...S.data.bienes[id],crToma:crFijo(t,id),crTomaNombre:nombreCR(crFijo(t,id)).split(' — ').slice(1).join(' — ')}:S.data.bienes[id],S.tGroup)===k).sort((a,b)=>((S.data.bienes[a].idEtq??Infinity)-(S.data.bienes[b].idEtq??Infinity)||a.localeCompare(b,'es',{numeric:true})))}; }
 Object.assign(ACT,{
   tGrupo(_,el){ S.tGroup=el.value; S.tOpen={}; S.tglim=40; render(); },
   gToggle(i){ const k=(S._gk||[])[Number(i)]; S.tOpen=S.tOpen||{}; S.tOpen[k]=!S.tOpen[k]; render(); },
@@ -1937,7 +1947,7 @@ function analizarRangos(txt){const M=indiceEtiqueta(),nums=new Set();for(const t
 }
 function registrarIDsModal(txt='',estado=S.here.c,oper=S.here.o){const t=S.data.tomas[S.tomaSel];if(!t||t.estado!=='abierta')return;
  openForm({title:'Registrar IDs',note:`Contando en <b>${esc(hereTxt())}</b>. Confirma los IDs contra las etiquetas físicas.`,fields:[{k:'rangos',l:'IDs o rangos',v:txt,req:true,full:true,ph:'10-29, 35, 40-42'},F.condicion(estado),F.oper(oper)],ok:'Ver vista previa',submit:async v=>{
-  if(!S.here.piso&&!S.here.ambiente)return {error:'Elige primero la ubicación en «Contando en».'};let r;try{r=analizarRangos(v.rangos);}catch(e){return {error:e.message};}if(!r.bienes.length)return {error:'No hay IDs reconocidos en este rango.'};const tid=S.tomaSel,H=structuredClone(S.here),C=structuredClone(conteos(tid));const existentes=r.bienes.filter(b=>C[b.id]),fuera=r.bienes.filter(b=>!(t.esperados||[]).includes(b.id));
+  if(!S.here.piso&&!S.here.ambiente)return {error:'Elige primero la ubicación en «Contando en».'};let r;try{r=analizarRangos(v.rangos);}catch(e){return {error:e.message};}if(!r.bienes.length)return {error:'No hay IDs reconocidos en este rango.'};if(esAnual(t)){try{r.bienes.forEach(b=>{validarRegistroCR(t,b.id);if(S.anCR&&crFijo(t,b.id)!==S.anCR)throw new Error('El rango incluye bienes de otro CR. Cambia al CR correspondiente.');});}catch(e){return {error:e.message};}}const tid=S.tomaSel,H=structuredClone(S.here),C=structuredClone(conteos(tid));const existentes=r.bienes.filter(b=>C[b.id]),fuera=r.bienes.filter(b=>!(t.esperados||[]).includes(b.id));
   openForm({title:'Confirmar IDs de campo',note:`<b>${r.bienes.length}</b> bienes · IDs ${esc(rangoIds(r.bienes.map(b=>Number(b.idEtq))))}<br>Ubicación: <b>${esc(hereTxt())}</b><ul>${[...r.grupos].map(([k,n])=>`<li>${esc(k)}: ${n}</li>`).join('')}</ul>${r.grupos.size>1?'<p class="err">El rango mezcla ACTIVO distintos. Comprueba cada etiqueta antes de continuar.</p>':''}${existentes.length?`<p>${existentes.length} IDs ya registrados: ${esc(rangoIds(existentes.map(b=>Number(b.idEtq))))}. Se conservan salvo que elijas reemplazarlos.</p>`:''}${r.inexistentes.length?`<p class="err">IDs inexistentes (no se registran): ${esc(rangoIds(r.inexistentes))}</p>`:''}${fuera.length?`<p>${fuera.length} bienes fuera del alcance de la toma.</p>`:''}`,fields:[...(existentes.length?[{k:'reemplazar',l:'Conteos existentes',t:'select',opts:[['no','Conservarlos'],['si','Reemplazarlos (guardar estado anterior)']],full:true}]:[]),{k:'conf',l:'Escribe REGISTRAR para confirmar los IDs',req:true,full:true}],ok:'Registrar IDs',submit:async w=>{
    if(w.conf!=='REGISTRAR')return {error:'Escribe REGISTRAR para confirmar.'};if(S.data.tomas[tid]?.estado!=='abierta')return {error:'La toma ya no está abierta.'};
    const actual=C,L=r.bienes.filter(b=>w.reemplazar==='si'||!actual[b.id]);if(!L.length){toast('Todos los IDs ya estaban registrados.');return;}
@@ -2217,13 +2227,13 @@ async function impEjecutar(){ exigirEscritura();if(S._imp?.r.tipo==='v3')return 
   const res=await guardarGrupoConteos(t.id,items,(d,n)=>modalProgress(`Guardando conteos: ${d} de ${n}…`));
   const nuevos=[...r.sob.map(f=>({d:f.d,cant:Math.max(1,Math.round(Number(f.cant)||1)),marca:f.marca,modelo:f.modelo,serie:f.serie})), ...(addSob?r.desconocidos.map(f=>({d:f.d,cant:Math.max(1,Math.round(Number(f.cant)||1)),nota:`Código ${f.code} no está en el registro`})):[])]
     .map((o,i)=>{ const f=i<r.sob.length?r.sob[i]:r.desconocidos[i-r.sob.length]; const u=ubicar(f); const e=estImp(f.estado); return {...o,c:e.c||'Por evaluar',o:operDe(f.oper)||'No probado',ub:[edifCorto(u.sede)||f.edif,u.piso&&(/^\d/.test(u.piso)?'Piso '+u.piso:u.piso),u.cuad,u.ambiente].filter(Boolean).join(' · '),amb:u.amb,cuad:u.cuad,pt:u.pt,nota:[o.nota,f.obs].filter(Boolean).join(' · '),u:S.me||null,t:fechaIso(f.fecha)||nowIso(),imp:file}; });
-  if(nuevos.length){ const tt=S.data.tomas[t.id]; await patch('tomas',t.id,{sobrantes:[...(tt.sobrantes||[]),...nuevos]}); }
+  if(nuevos.length){if(esAnual(t)){for(const s of nuevos)await editarSobrantesCR(t.id,arr=>[...arr,{...s,id:uid()}]);}else{const tt=S.data.tomas[t.id];await patch('tomas',t.id,{sobrantes:[...(tt.sobrantes||[]),...nuevos]});}}
   S._imp=null;if(conflictosGrupo(res))return;$('#modal').close(); toast(`Importado: ${res.done-res.fail} conteos${nuevos.length?` y ${nuevos.length} sobrantes`:''}${res.fail?` · ${res.fail} con error, vuelve a importar el archivo`:''}.`); }
 
 /* Alta de una unidad sobrante: secuencia y datos se guardan juntos en Firebase. */
 async function altaUnidadSobrante(tid,index,v){
  const id=safeId(v.codigo),ciclo=S.data.tomas[tid],origen=ciclo.sobrantes[index];
- const construir=(t,seq,existe)=>{if(existe)throw new Error('Ese código ADM ya existe.');const s=t.sobrantes[index];if(!s||s.d!==origen.d||s.t!==origen.t)throw new Error('El sobrante cambió. Vuelve a abrirlo.');const regs=s.regIds||[];if(s.reg||regs.length>=(Number(s.cant)||1))throw new Error('Todas las unidades ya fueron dadas de alta.');const nuevo=Math.max(1305,Number(seq?.ultimo)||0,...bienes().map(b=>Number(b.idEtq)||0))+1;
+ const construir=(t,seq,existe)=>{if(esAnual(t)){exigirAdmin();if(estadoCR(t,t.sobrantes[index]?.cr||SIN_CR)!=='cerrada')throw new Error('Regulariza el sobrante después de cerrar su CR.');}if(existe)throw new Error('Ese código ADM ya existe.');const s=t.sobrantes[index];if(!s||s.d!==origen.d||s.t!==origen.t)throw new Error('El sobrante cambió. Vuelve a abrirlo.');const regs=s.regIds||[];if(s.reg||regs.length>=(Number(s.cant)||1))throw new Error('Todas las unidades ya fueron dadas de alta.');const nuevo=Math.max(1305,Number(seq?.ultimo)||0,...bienes().map(b=>Number(b.idEtq)||0))+1;
   const d={...v,...ubVals(v),codigo:v.codigo.toUpperCase(),idEtq:nuevo,crToma:v.crToma,crTomaNombre:S.data.config.crPrioridad?.crs?.[v.crToma]?.nombre||'',prioridadCR:S.data.config.crPrioridad?.crs?.[v.crToma]?.prioridad||null,etapa:'en_uso',fechaAlta:today(),creado:nowIso(),act:nowIso(),marca:s.marca||'',modelo:s.modelo||'',serie:s.serie||'',inv:{f:today(),toma:t.nombre,r:'Encontrado'},hist:[ev('Alta por sobrante de inventario',`${t.nombre} · ID ${nuevo}`)]};
   const arr=structuredClone(t.sobrantes);const regIds=[...regs,id];arr[index]={...s,regIds,...(regIds.length>=(Number(s.cant)||1)?{reg:regIds[0]}:{})};return {d,arr,nuevo};};
  if(DB){if(typeof DB.runTransaction!=='function')throw new Error('Para asignar IDs nuevos de forma segura, conecta primero Firebase. El sobrante permanece registrado.');
@@ -2233,7 +2243,7 @@ async function altaUnidadSobrante(tid,index,v){
 }
 Object.assign(ACT,{tSobReg(i){const tid=S.tomaSel,index=Number(i),t=S.data.tomas[tid],s=t.sobrantes[index],hechos=(s.regIds||[]).length;
  const crs=Object.entries(S.data.config.crPrioridad?.crs||{}).sort((a,b)=>a[1].prioridad-b[1].prioridad).map(([cr,x])=>[cr,`${cr} — ${x.nombre}`]);if(!crs.length){toast('Carga los CR desde la V3 antes de regularizar.');return;}
- openForm({title:'Dar de alta una unidad sobrante',note:`${hechos} de ${Number(s.cant)||1} unidades regularizadas. Cada unidad recibe un ID nuevo e inmutable, desde 1306, y su propia fila. Las etiquetas anteriores no cambian.`,fields:[F.nombre(s.d),F.tipo('AF'),{k:'codigo',l:'Código ADM de esta unidad',req:true,v:nextCode('AF')},F.categoria(),{k:'crToma',l:'CR único asignado',t:'select',opts:crs,req:true,full:true},F.area('',true),...ubF({},true),F.responsable('',true),F.condicion(s.c),F.oper(s.o)],ok:'Dar de alta esta unidad',submit:async v=>{try{const nuevo=await altaUnidadSobrante(tid,index,v);toast(`Unidad dada de alta con ID ${nuevo}. Ya puedes exportar su etiqueta Zebra.`);render();}catch(e){return {error:e.message};}}});
+ openForm({title:'Dar de alta una unidad sobrante',note:`${hechos} de ${Number(s.cant)||1} unidades regularizadas. Cada unidad recibe un ID nuevo e inmutable, desde 1306, y su propia fila. Las etiquetas anteriores no cambian.`,fields:[F.nombre(s.d),F.tipo('AF'),{k:'codigo',l:'Código ADM de esta unidad',req:true,v:nextCode('AF')},F.categoria(),{k:'crToma',l:'CR único asignado',t:'select',opts:crs,v:s.cr||'',req:true,full:true},F.area('',true),...ubF({},true),F.responsable('',true),F.condicion(s.c),F.oper(s.o)],ok:'Dar de alta esta unidad',submit:async v=>{try{const nuevo=await altaUnidadSobrante(tid,index,v);toast(`Unidad dada de alta con ID ${nuevo}. Ya puedes exportar su etiqueta Zebra.`);render();}catch(e){return {error:e.message};}}});
 }});
 
 /* ---------- R6: formatos originales V3 y Zebra ---------- */
@@ -2278,7 +2288,7 @@ function tablasNormalizadas(datos=S.data,usuarios=S.usuarios){
  const rangos=new Set();for(const [id,l]of entries(cfg))if(id.startsWith('toma-r5-'))for(const x of l.prev||[])rangos.add(`${l.toma}/${x.id}/${x.nuevo?.t||''}`);
  add('Bienes',['BienID','IDEtiqueta','CodigoContable','Descripcion','ActivoNormalizado','Tipo','Categoria','Seccion','Cuenta','Marca','Modelo','Serie','CR','CRNombre','PrioridadCR','CROriginal','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Custodio','Conservacion','Operatividad','Etapa','FechaAdquisicion','ValorHistorico','ValorNeto','UltimaVerificacion','ResultadoUltimaToma','DupRegistro','Creado','Actualizado'],B.map(([id,b])=>[id,num(b.idEtq),txt(b.codCont),b.nombre||'',activoKey(b.nombre),b.tipo||'',b.categoria||'',b.seccion||'',txt(b.cuenta),b.marca||'',b.modelo||'',b.serie||'',txt(b.crToma),b.crTomaNombre||cfg.crPrioridad?.crs?.[b.crToma]?.nombre||'',num(b.prioridadCR),txt(b.crOriginal),b.sede||'',txt(b.piso),b.ambiente||'',b.amb||'',b.cuad||'',b.responsable||'',b.condicion||'',b.oper||'',b.etapa||'',fechaNormalizada(b.fechaAdq),cash(b.valorHist),cash(b.valorNeto),fechaNormalizada(b.inv?.f),b.inv?.r||'',b.dupRegistro?'Sí':'No',fechaNormalizada(b.creado),fechaNormalizada(b.act||b._m)]));
  add('Historial',['BienID','Fecha','Evento','Detalle','Usuario','TomaID'],B.flatMap(([id,b])=>(b.hist||[]).map(h=>[id,fechaNormalizada(h.t),h.tipo||'',h.det||'',nombre(h.u),h.toma||''])));
- add('Tomas',['TomaID','Nombre','Estado','Alcance','Inicio','Cierre','Esperados','Encontrados','NoLocalizados','PorConciliar','Sobrantes'],T.map(([id,t])=>{const c=D[`tomas/${id}/conteos`]||{},ids=new Set(t.esperados||[]),n=r=>[...ids].filter(bid=>c[bid]?.r===r||(r==='No localizado'&&t.estado==='cerrada'&&!c[bid])).length;return [id,t.nombre||'',t.estado||'',t.alcance||'',fechaNormalizada(t.creado),fechaNormalizada(t.cierre),ids.size,n('Encontrado'),n('No localizado'),n('Por conciliar'),(t.sobrantes||[]).reduce((n,s)=>n+(Number(s.cant)||1),0)];}));
+ add('Tomas',['TomaID','Nombre','Estado','Alcance','Inicio','Cierre','Esperados','Encontrados','NoLocalizados','PorConciliar','Sobrantes'],T.map(([id,t])=>{const c=D[`tomas/${id}/conteos`]||{},ids=new Set(t.esperados||[]),n=r=>[...ids].filter(bid=>c[bid]?.r===r||(r==='No localizado'&&(t.estado==='cerrada'||(esAnual(t)&&estadoCR(t,crFijo(t,bid))==='cerrada'))&&!c[bid])).length;return [id,t.nombre||'',t.estado||'',t.alcance||'',fechaNormalizada(t.creado),fechaNormalizada(t.cierre),ids.size,n('Encontrado'),n('No localizado'),n('Por conciliar'),(t.sobrantes||[]).reduce((n,s)=>n+(Number(s.cant)||1),0)];}));
  add('Conteos',['TomaID','BienID','IDEtiqueta','Resultado','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Conservacion','Operatividad','Cantidad','Observacion','Usuario','Fecha','Origen','ArchivoOrigen'],C.flatMap(([p,c])=>entries(c).map(([bid,v])=>{const tid=p.split('/')[1];return [tid,bid,num(D.bienes?.[bid]?.idEtq),v.r||'',v.sede||'',txt(v.piso),v.ambiente||'',v.amb||'',v.cuad||'',v.c||'',v.o||'',num(v.cant),v.obs||'',nombre(v.u),fechaNormalizada(v.t),v.imp?'importación':v.origen|| (rangos.has(`${tid}/${bid}/${v.t||''}`)?'rango':'manual (origen no conservado)'),v.imp?(typeof v.imp==='object'?JSON.stringify(v.imp):v.imp):''];})));
  add('Sobrantes',['TomaID','#','Descripcion','Cantidad','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Ubicacion','Conservacion','Operatividad','Marca','Modelo','Serie','Observacion','Usuario','Fecha','BienesAlta'],T.flatMap(([tid,t])=>(t.sobrantes||[]).map((v,i)=>[tid,i+1,v.d||'',Number(v.cant)||1,v.sede||'',txt(v.piso),v.ambiente||'',v.amb||'',v.cuad||'',v.ub||'',v.c||'',v.o||'',v.marca||'',v.modelo||'',v.serie||'',v.nota||'',nombre(v.u),fechaNormalizada(v.t),list(v.regIds|| (v.reg?[v.reg]:[]))])));
  add('Mantenimientos',['MantenimientoID','BienID','Tipo','Estado','FechaProgramada','Inicio','FechaReal','Descripcion','Tecnico','PeriodicidadMeses','Costo','Resultado','FueraDeServicio','Usuario','Creado','Actualizado'],entries(D.mantenimientos).map(([id,v])=>[id,v.bienId||'',v.tipo||'',v.estado||'',fechaNormalizada(v.fechaProg),fechaNormalizada(v.inicio),fechaNormalizada(v.fechaReal),v.descripcion||'',v.tecnico||'',num(v.per),cash(v.costo),v.resultado||'',v.fuera?'Sí':'No',nombre(v.u),fechaNormalizada(v.creado),fechaNormalizada(v.act||v._m)]));
@@ -2377,7 +2387,7 @@ function crReporte(b){if(b.crToma)return String(b.crToma);if(/^\d+$/.test(String
 async function consolidadoToma(t){
  const meta=S.data.config.formato71;if(!meta)throw new Error('Enriquece primero el registro con el Formato 7.1 para validar el consolidado.');
  const C=conteos(t.id),esperados=new Set(t.esperados||[]),abierta=t.estado==='abierta',estado=abierta?'PRELIMINAR':'DEFINITIVO';
- const L=bienes().map(b=>{const c=C[b.id];return {b,c,cr:crReporte(b),r:c?.r||(esperados.has(b.id)?(abierta?'Pendiente':'No localizado'):'Fuera del alcance'),alcance:esperados.has(b.id)};}).sort((a,b)=>(a.b.seccion||a.b.categoria||'Sin sección').localeCompare(b.b.seccion||b.b.categoria||'Sin sección','es')||codigoTomaKey(a.b.codCont).localeCompare(codigoTomaKey(b.b.codCont),'es',{numeric:true})||a.b.id.localeCompare(b.b.id));
+ const L=bienes().map(b=>{const c=C[b.id];return {b,c,cr:esAnual(t)&&esperados.has(b.id)?crFijo(t,b.id):crReporte(b),r:c?.r||(esperados.has(b.id)?(esAnual(t)?resultadoAnual(t,b.id,C):abierta?'Pendiente':'No localizado'):'Fuera del alcance'),alcance:esperados.has(b.id)};}).sort((a,b)=>(a.b.seccion||a.b.categoria||'Sin sección').localeCompare(b.b.seccion||b.b.categoria||'Sin sección','es')||codigoTomaKey(a.b.codCont).localeCompare(codigoTomaKey(b.b.codCont),'es',{numeric:true})||a.b.id.localeCompare(b.b.id));
  const suma=(arr,k)=>arr.reduce((s,x)=>s+(Number(x.b[k])||0),0),red=v=>Math.round((v+Number.EPSILON)*100)/100;
  const cab=nombre=>[[{v:'FORMATO 7.1 — REGISTRO DE ACTIVOS FIJOS Y TOMA FÍSICA',s:'t'}],[`PERÍODO: ${meta.periodo}`],[`RUC: ${meta.ruc}`],[`RAZÓN SOCIAL: ${meta.razon}`],[{v:`${nombre} · ${t.nombre} · ${estado}`,s:'lab'}],[`Inicio: ${ddmmyyyy(t.creado)} · Cierre: ${ddmmyyyy(t.cierre)} · Emisión: ${ddmmyyyy(nowIso())}`]];
  const hoja=(name,heads,rows,cols)=>({name,rows:[...cab(name),heads.map(v=>({v,s:'h'})),...rows],cols,freeze:7,titles:'7',grid:false,foot:`${meta.razon} · ${t.nombre} · ${estado}`});
@@ -2705,6 +2715,7 @@ const PLANO_IMG = id => /^LIM-(S2|S1|SM|P[1-5]|AZ)$/.test(id) ? `${id}.png` : nu
 function respaldoResumen(j){ const out=[]; let n=0; for(const [p,docs] of Object.entries(j.colecciones||{})){ if(!PATH_OK(p)) continue; const k=Object.keys(docs||{}).length; n+=k; if(!p.includes('/')) out.push([p,k]); } const nc=Object.entries(j.colecciones||{}).filter(([p])=>/\/conteos$/.test(p)).reduce((a,[,d])=>a+Object.keys(d).length,0); return {n,out,nc}; }
 async function importarRespaldo(j,onProg){
   exigirAdmin();
+  if(Object.values(S.data.tomas||{}).some(esAnual)||Object.values(j.colecciones?.tomas||{}).some(esAnual))throw new Error('La restauración de una toma anual requiere revisión de sus actas y fichas. No se importó ningún registro; conserva el respaldo completo.');
   const items=[]; for(const [p,docs] of Object.entries(j.colecciones||{})){ if(!PATH_OK(p)) continue; for(const [id,d] of Object.entries(docs||{})){ const x={...d}; delete x._m; delete x._del; if(p==='bienes'&&x.crTomaCod!=null){ const lbl=String(x.crToma||''); x.crToma=String(x.crTomaCod); if(!x.crTomaNombre) x.crTomaNombre=lbl.includes(' — ')?lbl.split(' — ').slice(1).join(' — '):lbl; delete x.crTomaCod; } if(p==='config'&&id==='crPrioridad'&&x.map&&!x.crs){ x.crs=Object.fromEntries(Object.entries(x.map).map(([c,v])=>[String(c),{nombre:String(v.nombre||'').split(' — ').slice(1).join(' — ')||String(v.nombre||c),prioridad:Number(v.p)}])); delete x.map; } if(p==='planos'){ const f=PLANO_IMG(id); if(f) x.img=f; else if(x.img && !/^(data:|planos\/|LIM-[A-Z0-9]+\.png$)/.test(x.img)) x.img=null; } items.push([p,id,x]); } }
   let done=0; for(let i=0;i<items.length;i+=400){ exigirAdmin(); const b=FS.batch(); items.slice(i,i+400).forEach(([p,id,x])=>b.set(FS.collection(p).doc(id),{...x,_m:TS()})); await retry(()=>b.commit()); done+=Math.min(400,items.length-i); onProg&&onProg(done,items.length); }
   return items.length; }
@@ -2719,6 +2730,285 @@ Object.assign(ACT,{
           submit:async()=>{ const n=await importarRespaldo(j,(d,t)=>modalProgress(`Importando: ${d.toLocaleString('es-PE')} de ${t.toLocaleString('es-PE')}…`)); toast(`Importados ${n.toLocaleString('es-PE')} registros.`); } }),30); return {keep:true}; } }); },
 });
 function userMenu(){ const s=$('#sync'); if(!s) return;const abierto=$('#umenu')?.open;$('#umenu')?.remove();s.insertAdjacentHTML('afterend',`<details class="menu right" id="umenu"><summary class="btn sm ghost" title="Tu cuenta">${esc(S.myName||'Mi cuenta')} <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${S.admin?`<button class="mi" role="menuitem" data-act="uUsuarios">Usuarios…</button><button class="mi" role="menuitem" data-act="uImportar">Importar respaldo…</button>`:''}<button class="mi" role="menuitem" data-act="exportarTodoExcel">Exportar todo a Excel</button><button class="mi" role="menuitem" data-act="respaldo">Descargar respaldo completo</button><button class="mi" role="menuitem" data-act="uSalir">Cerrar sesión</button></div></details>`);if(abierto)$('#umenu').open=true; }
+
+/* ---------- Toma anual: pertenencia fija, cierre y acta por CR ---------- */
+const SIN_CR='SIN_CR';
+const esAnual=t=>t?.anualCR===1;
+const crFijo=(t,id)=>t.crPorBien?.[id]||SIN_CR;
+const nombreCR=cr=>cr===SIN_CR?'Sin CR asignado':`${cr} — ${S.data.config.crPrioridad?.crs?.[cr]?.nombre||'Centro de responsabilidad'}`;
+const idsCR=(t,cr)=>(t.esperados||[]).filter(id=>crFijo(t,id)===cr);
+const estadoCR=(t,cr)=>t.crEstados?.[cr]?.estado||'abierta';
+const crActual=b=>/^\d+$/.test(String(crReporte(b)))?String(crReporte(b)):SIN_CR;
+function validarRegistroCR(t,id){
+ if(!esAnual(t))return;
+ if(!Object.hasOwn(t.crPorBien||{},id))throw new Error('Bien fuera del alcance anual. El administrador debe incorporarlo expresamente a un CR abierto.');
+ const cr=crFijo(t,id);
+ if(cr===SIN_CR)throw new Error('Este bien está sin CR asignado. El administrador debe resolver su asignación.');
+ if(estadoCR(t,cr)!=='abierta')throw new Error('Este CR está cerrado o en proceso de cierre. Sus registros están bloqueados.');
+}
+function resultadoAnual(t,id,C=conteos(t.id)){
+ return C[id]?.r||(estadoCR(t,crFijo(t,id))==='cerrada'?'No localizado':'Pendiente');
+}
+function avanceCR(t,cr){
+ const ids=cr?idsCR(t,cr):(t.esperados||[]),C=conteos(t.id),r={tot:ids.length,enc:0,conc:0,nol:0,pend:0};
+ for(const id of ids){const s=resultadoAnual(t,id,C);if(s==='Encontrado')r.enc++;else if(s==='Por conciliar')r.conc++;else if(s==='No localizado')r.nol++;else r.pend++;}
+ return {...r,ver:r.enc+r.conc+r.nol,ok:r.enc+r.conc};
+}
+function estructuraAnual(ids){
+ const crPorBien=Object.fromEntries(ids.map(id=>[id,crActual(S.data.bienes[id]||{})]));
+ const crEstados=Object.fromEntries([...new Set(Object.values(crPorBien))].map(cr=>[cr,{estado:'abierta',version:0,actas:[]}]));
+ return {anualCR:1,crPorBien,crEstados,cierresRealizados:0,cierresEnCurso:0};
+}
+function limpiarDocumento(d){const x=structuredClone(d);delete x._m;return x;}
+// Todas las mutaciones nuevas pasan por DBX; la transacción publica el estado local solo tras confirmar.
+async function transaccionCR(paths,fn){
+ exigirEscritura();let cambio;
+ const ejecutar=async tx=>{
+  const docs=DB?await Promise.all(paths.map(p=>tx.get(DB.doc(p)))):paths.map(p=>{const k=p.lastIndexOf('/'),d=S.data[p.slice(0,k)]?.[p.slice(k+1)];return {exists:!!d,data:()=>d};});
+  const valores=docs.map(s=>s.exists&&!s.data()._del?limpiarDocumento(s.data()):null);
+  const r=fn(valores),writes=r.writes||[];
+  for(const [path,d]of writes)if(DB)tx.set(DB.doc(path),d);
+  cambio=writes;return r.value;
+ };
+ const result=await queue('anual-cr',()=>DB?DB.runTransaction(ejecutar):ejecutar(null));
+ for(const [p,d]of cambio||[]){const k=p.lastIndexOf('/'),col=p.slice(0,k),id=p.slice(k+1);colObj(col)[id]=structuredClone(d);}
+ render();return result;
+}
+async function leerCR(path){
+ if(!DB){const k=path.lastIndexOf('/');return structuredClone(S.data[path.slice(0,k)]?.[path.slice(k+1)]||null);}
+ const snap=FS?await FS.doc(path).get({source:'server'}):await DB.doc(path).get();
+ return snap.exists&&!snap.data()._del?limpiarDocumento(snap.data()):null;
+}
+async function coleccionCR(path){
+ if(!DB)return structuredClone(colObj(path));
+ const snap=await FS.collection(path).get({source:'server'}),out={};for(const d of snap.docs)if(!d.data()._del)out[d.id]=limpiarDocumento(d.data());S.data[path]=out;return out;
+}
+async function refrescarTomaCR(tid){
+ if(!DB)return {id:tid,...S.data.tomas[tid]};
+ const t=await leerCR(`tomas/${tid}`);if(!t)throw new Error('La toma ya no existe.');
+ S.data.tomas[tid]=t;await coleccionCR(`tomas/${tid}/conteos`);return {id:tid,...t};
+}
+async function adaptarAnual(tid,esperado,aprobada=estructuraAnual(esperado).crPorBien){
+ exigirAdmin();
+ // El respaldo incluye los conteos, pero la adaptación no escribe ni uno de ellos.
+ const t=await refrescarTomaCR(tid);
+ if(firmaDatos(t.esperados)!==firmaDatos(esperado))throw new Error('El alcance cambió. Revisa de nuevo la vista previa.');
+ if(DB){const rows=await FS.collection('bienes').get({source:'server'});for(const d of rows.docs)if(!d.data()._del)S.data.bienes[d.id]=limpiarDocumento(d.data());}
+ const estructura=estructuraAnual(t.esperados||[]);
+ if(firmaDatos(estructura.crPorBien)!==firmaDatos(aprobada))throw new Error('La asignación de CR cambió desde la vista previa. Revisa de nuevo la distribución antes de adaptar.');
+ return transaccionCR([`tomas/${tid}`],([actual])=>{
+  exigirAdmin();if(!actual||actual.estado!=='abierta'||esAnual(actual)||firmaDatos(actual.esperados)!==firmaDatos(esperado))throw new Error('La toma cambió o ya está adaptada. Vuelve a abrirla.');
+  if(fichasCierreInterrumpido({id:tid,...actual}).length)throw new Error('Primero revierte el cierre global interrumpido.');
+  return {writes:[[`tomas/${tid}`,{...actual,...estructura,adaptadaCR:nowIso(),uAdaptacion:S.me}]],value:estructura};
+ });
+}
+function anualHtml(t){
+ const crs=Object.keys(t.crEstados||{}).sort((a,b)=>crOrden(a)-crOrden(b)||crNum(a)-crNum(b)||a.localeCompare(b));
+ const closed=crs.filter(cr=>cr!==SIN_CR&&estadoCR(t,cr)==='cerrada').length,asignados=crs.filter(c=>c!==SIN_CR).length;
+ return `<div class="card flush anual-cr"><div class="card-h" style="padding:16px"><div><h3>Avance anual por centro de responsabilidad</h3><div class="small muted">${closed} de ${asignados} CR cerrados · Asignación fija para esta toma; la ubicación física puede ser distinta.</div></div>${t.estado==='abierta'&&S.admin?`<button class="btn sm" data-act="anIncorporar">Incorporar bien / asignar CR…</button>`:''}</div><div class="tbl-wrap"><table><thead><tr><th>Centro de responsabilidad</th><th>Avance</th><th>Encontrados</th><th>Por conciliar</th><th>No localizados</th><th>Pendientes</th><th>Estado / acciones</th></tr></thead><tbody>${crs.map(cr=>{
+ const p=avanceCR(t,cr),s=t.crEstados[cr],cerrada=s.estado==='cerrada',ocupada=['cerrando','revirtiendo'].includes(s.estado);
+ return `<tr ${S.anCR===cr?'class="found"':''}><td><b>${esc(nombreCR(cr))}</b></td><td><div class="progress"><i style="width:${p.tot?p.ver/p.tot*100:0}%"></i></div><span class="small num">${p.ver} de ${p.tot}</span></td><td class="num">${p.enc}</td><td><button class="btn link small" data-act="anConciliar" data-id="${esc(cr)}">${p.conc}</button></td><td class="num">${p.nol}</td><td class="num">${p.pend}</td><td><div class="row" style="gap:4px">${chip(cerrada?'Cerrado':ocupada?'Cierre pendiente':'Abierto',cerrada?'c-ok':'c-warn')}<button class="btn sm" data-act="anVer" data-id="${esc(cr)}">${cr===SIN_CR?'Revisar':cerrada||ocupada?'Ver':'Registrar'}</button>${S.admin&&cr!==SIN_CR&&(t.estado==='abierta'||cerrada)?cerrada?`<button class="btn sm" data-act="anReabrir" data-id="${esc(cr)}">Reabrir…</button>`:ocupada?`<button class="btn sm" data-act="anContinuar" data-id="${esc(cr)}">Continuar cierre</button><button class="btn sm" data-act="anRevertir" data-id="${esc(cr)}">Revertir…</button>`:`<button class="btn sm" data-act="anCerrar" data-id="${esc(cr)}">Cerrar CR…</button>`:''}${(s.actas||[]).length?`<button class="btn sm" data-act="anActas" data-id="${esc(cr)}">Actas (${s.actas.length})</button>`:''}</div></td></tr>`;
+ }).join('')}</tbody></table></div></div>${S.anCR?`<div class="row between"><h3>${esc(nombreCR(S.anCR))}</h3><button class="btn ghost" data-act="anTodos">Ver todos los CR</button></div>`:`<p class="small muted">Elige «Registrar» en un CR para trabajar únicamente con sus bienes.</p>`}`;
+}
+function sobAnualHtml(t){
+ const L=(t.sobrantes||[]).map((s,i)=>({s,i})).filter(({s})=>!S.anCR||(s.cr||SIN_CR)===S.anCR);
+ return `<div class="card"><div class="card-h"><h3>Sobrantes del CR</h3>${t.estado==='abierta'&&(!S.anCR||estadoCR(t,S.anCR)==='abierta')?`<button class="btn sm" data-act="tSobrante">Agregar sobrante</button>`:''}</div><p class="small muted">La asignación a CR es expresa. Los sobrantes sin CR no se incluyen en ninguna acta hasta asignarlos.</p>${L.map(({s,i})=>`<div class="li"><div class="grow"><b>${esc(s.d)}</b> × ${s.cant||1}<div class="small muted">${esc(nombreCR(s.cr||SIN_CR))} · ${esc(s.ub||'')}${s.nota?' · '+esc(s.nota):''}</div></div>${t.estado==='abierta'&&estadoCR(t,s.cr||SIN_CR)==='abierta'?`<button class="btn sm" data-act="anSobAsignar" data-i="${i}">Asignar CR…</button><button class="btn sm" data-act="tSobDel" data-i="${i}">Quitar</button>`:''}${s.reg?chip('Regularizado','c-ok'):S.admin&&estadoCR(t,s.cr||SIN_CR)==='cerrada'?`<button class="btn sm" data-act="tSobReg" data-i="${i}">Registrar como bien</button>`:''}</div>`).join('')||'<div class="empty small">Sin sobrantes en esta vista.</div>'}</div>`;
+}
+function huellaCierreCR(t,cr){
+ const C=conteos(t.id);return firmaDatos({ids:idsCR(t,cr),conteos:idsCR(t,cr).map(id=>[id,versionConteo(C[id])]),sob:(t.sobrantes||[]).filter(s=>s.cr===cr),estado:t.crEstados[cr]});
+}
+function pendientesCR(t,cr){return idsCR(t,cr).filter(id=>!conteos(t.id)[id]);}
+async function cambiosPosterioresCR(t,cr){
+ const ultimo=t.crEstados[cr]?.ultimoCierre;if(!ultimo)return {firmas:{},cambios:[]};
+ const F=await coleccionCR(`tomas/${t.id}/actasCR/${ultimo}/filas`),firmas={},cambios=[];
+ const r=await runMany(idsCR(t,cr).map(id=>async()=>{
+  const b=await leerCR(`bienes/${id}`);if(!b||!F[id])throw new Error('No se encuentra el respaldo de una ficha del CR.');
+  S.data.bienes[id]=b;firmas[id]=firmaDatos(b);if(firmas[id]!==F[id].firmaDespues)cambios.push({id,etiqueta:b.idEtq,codigo:b.codigo||id,otraToma:b.inv?.cierreCR&&b.inv.cierreCR!==ultimo});
+ }),8);
+ if(r.fail)throw new Error('No se pudieron revisar todas las fichas frente al acta anterior. Reintenta antes de cerrar.');
+ return {firmas,cambios};
+}
+async function comenzarCierreCR(tid,cr,huella,avisados=[],fichasRevisadas=null){
+ exigirAdmin();const t=await refrescarTomaCR(tid);
+ if(huellaCierreCR(t,cr)!==huella)throw new Error('Los registros o los sobrantes del CR cambiaron. Abre de nuevo el cierre y revisa los totales.');
+ const ids=idsCR(t,cr),C=conteos(tid);
+ if(!ids.length||cr===SIN_CR)throw new Error('Primero asigna los bienes a un CR válido.');
+ if(ids.some(id=>C[id]?.r==='Por conciliar'))throw new Error('Resuelve los bienes por conciliar antes de cerrar este CR.');
+ const nuevos=ids.map(id=>C[id]).filter(c=>c?.u&&c.u!==S.me&&!avisados.includes(c.u)&&Date.parse(c.t)>Date.now()-600000);
+ if(nuevos.length)throw new Error('Hay nueva actividad de otras personas. Revisa otra vez el aviso de cierre.');
+ const revision=await cambiosPosterioresCR(t,cr);
+ if(revision.cambios.length&&firmaDatos(fichasRevisadas)!==firmaDatos(revision.firmas))throw new Error('Hay fichas que cambiaron después del acta anterior. Revisa y acepta esos cambios en la vista previa del cierre.');
+ const op=uid(),f=nowIso(),fecha=today();
+ return transaccionCR([`tomas/${tid}`],([actual])=>{
+  exigirAdmin();if(!actual||actual.estado!=='abierta'||estadoCR(actual,cr)!=='abierta'||firmaDatos(actual.crEstados[cr])!==firmaDatos(t.crEstados[cr])||firmaDatos(actual.crPorBien)!==firmaDatos(t.crPorBien)||firmaDatos(actual.sobrantes)!==firmaDatos(t.sobrantes))throw new Error('El CR cambió o ya se está cerrando. Revisa el resumen.');
+  const anterior=actual.crEstados[cr],version=(anterior.version||0)+1,info={...anterior,estado:'cerrando',op,versionEnCurso:version,inicio:f};
+  const acta={estado:'proceso',cr,version,fecha:f,fechaArchivo:fecha,tomaId:tid,tomaNombre:actual.nombre,crNombre:nombreCR(cr),por:S.me,nombreAdministrador:who(S.me),ids,fichasRevisadas:revision.firmas,meta:structuredClone(S.data.config.formato71||{razon:'Sociedad Bíblica Peruana',ruc:'20125899723',periodo:String(new Date().getFullYear())}),sobrantes:structuredClone((actual.sobrantes||[]).filter(s=>s.cr===cr).map(s=>({...s,inventariador:nameOf(s.u)}))),anterior};
+  return {writes:[[`tomas/${tid}`,{...actual,cierresEnCurso:(actual.cierresEnCurso||0)+1,crEstados:{...actual.crEstados,[cr]:info}}],[`tomas/${tid}/actasCR/${op}`,acta]],value:op};
+ });
+}
+function camposFichaCR(b){return Object.fromEntries(CAMPOS_CIERRE.map(k=>[k,b[k]??null]));}
+function fichaCierreCR(t,cr,op,b,c,fecha){
+ const r=c?.r||'No localizado';if(!['Encontrado','No localizado'].includes(r))throw new Error('El CR tiene bienes por conciliar.');
+ const inv={f:fecha.slice(0,10),toma:t.nombre,tomaId:t.id,cr,cierreCR:op,r};
+ const fields=r==='No localizado'?{inv}:{amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion||'',oper:c.o||b.oper||'',inv};
+ const evento={t:fecha,tipo:r==='Encontrado'?'Verificado en inventario':'No localizado en inventario',det:`${t.nombre} · CR ${cr}${c?.obs?' · '+c.obs:''}`,u:S.me,toma:t.id,cr,cierreCR:op,prev:camposFichaCR(b)};
+ return {...b,...fields,hist:[...(b.hist||[]),evento],act:fecha};
+}
+async function aplicarFilaCR(tid,cr,op,id){
+ const base=`tomas/${tid}/actasCR/${op}`;
+ return transaccionCR([`tomas/${tid}`,`bienes/${id}`,`tomas/${tid}/conteos/${id}`,`${base}/filas/${id}`,base],([t,b,c,fila,a])=>{
+  exigirAdmin();if(!t||t.estado!=='abierta'||estadoCR(t,cr)!=='cerrando'||t.crEstados[cr].op!==op||!a||a.estado!=='proceso')throw new Error('El cierre ya no está en proceso.');
+  if(fila)return {value:fila}; // Reintentar no vuelve a aplicar la ficha.
+  if(crFijo(t,id)!==cr||!a.ids.includes(id)||!b)throw new Error('Falta una ficha o cambió la pertenencia del CR.');
+  // En una reapertura, un cierre de otra toma o cambios posteriores deben revisarse expresamente.
+  const last=t.crEstados[cr].ultimoCierre;
+  if(last&&firmaDatos(b)!==a.fichasRevisadas?.[id])throw new Error(`La ficha ${b.codigo||id} cambió desde la vista previa. Revierte este cierre incompleto y revisa los cambios antes de cerrar de nuevo.`);
+  const nuevo=fichaCierreCR({id:tid,...t},cr,op,b,c,a.fecha),prev=camposFichaCR(b),despues=camposFichaCR(nuevo);
+  const dato={cr,bienId:id,bien:limpiarDocumento(b),conteo:c||null,resultado:c?.r||'No localizado',inventariador:c?.u?nameOf(c.u):'',prev,despues,firmaDespues:firmaDatos(nuevo),versionConteo:versionConteo(c)};
+  return {writes:[[`bienes/${id}`,nuevo],[`${base}/filas/${id}`,dato]],value:dato};
+ });
+}
+async function terminarCierreCR(tid,cr,op){
+ exigirAdmin();const base=`tomas/${tid}/actasCR/${op}`,a=await leerCR(base),F=await coleccionCR(`${base}/filas`);
+ if(!a||a.ids.length!==Object.keys(F).length||a.ids.some(id=>!F[id]||F[id].cr!==cr))throw new Error('El cierre está incompleto. Usa «Continuar cierre».');
+ const rows=a.ids.map(id=>F[id]),resumen={tot:rows.length,enc:rows.filter(x=>x.resultado==='Encontrado').length,conc:0,nol:rows.filter(x=>x.resultado==='No localizado').length,sob:a.sobrantes.reduce((n,s)=>n+(Number(s.cant)||1),0),valorHistoricoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorHist)||0),0),valorNetoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorNeto)||0),0)};
+ return transaccionCR([`tomas/${tid}`,base],([t,acta])=>{
+  exigirAdmin();if(acta?.estado==='definitiva'&&t?.crEstados[cr]?.ultimoCierre===op)return {value:acta};
+  if(!t||t.estado!=='abierta'||t.crEstados[cr]?.estado!=='cerrando'||t.crEstados[cr].op!==op||acta?.estado!=='proceso')throw new Error('El cierre cambió. Revisa el CR.');
+  const s=t.crEstados[cr],fin={...acta,estado:'definitiva',resumen};
+  return {writes:[[`tomas/${tid}`,{...t,cierresEnCurso:Math.max(0,(t.cierresEnCurso||0)-1),cierresRealizados:(t.cierresRealizados||0)+1,crEstados:{...t.crEstados,[cr]:{...s,estado:'cerrada',version:acta.version,cierre:acta.fecha,ultimoCierre:op,actas:[...(s.actas||[]),op],resumen}}}],[base,fin]],value:fin};
+ });
+}
+async function ejecutarCierreCR(tid,cr,op){
+ exigirAdmin();const a=await leerCR(`tomas/${tid}/actasCR/${op}`);if(!a)throw new Error('No se encuentra el cierre.');
+ S.cierreRun=true;S.abortar=false;let error=null;
+ try{
+  for(let i=0;i<a.ids.length;i++){
+   if(S.abortar)break;
+   modalProgress(`CR ${cr}: actualizando ficha ${i+1} de ${a.ids.length}…`);
+   await aplicarFilaCR(tid,cr,op,a.ids[i]);
+  }
+  if(S.abortar){await revertirCierreCR(tid,cr,op);toast('Cierre cancelado y fichas de ese cierre revertidas.');return;}
+  await terminarCierreCR(tid,cr,op);toast('CR cerrado. Preparando su acta Excel…');
+ }catch(e){error=e;}finally{S.cierreRun=false;S.abortar=false;}
+ if(error)throw new Error(`${error.message} El CR queda bloqueado para continuar o revertir; los demás CR pueden seguir trabajando.`);
+ try{await descargarActaCR(tid,op);}catch(e){toast('CR cerrado. La descarga falló; usa «Actas» para descargar sin repetir el cierre.');}
+}
+async function revertirCierreCR(tid,cr,op){
+ exigirAdmin();const base=`tomas/${tid}/actasCR/${op}`;
+ await transaccionCR([`tomas/${tid}`,base],([t,a])=>{
+  if(!t||!a||t.crEstados[cr]?.op!==op||!['cerrando','revirtiendo'].includes(estadoCR(t,cr))||a.estado!=='proceso')throw new Error('Solo se revierte un cierre incompleto.');
+  return {writes:[[`tomas/${tid}`,{...t,crEstados:{...t.crEstados,[cr]:{...t.crEstados[cr],estado:'revirtiendo'}}}]]};
+ });
+ const F=await coleccionCR(`${base}/filas`);
+ for(const id of Object.keys(F))await transaccionCR([`tomas/${tid}`,`bienes/${id}`,`${base}/filas/${id}`],([t,b,f])=>{
+  exigirAdmin();if(estadoCR(t,cr)!=='revirtiendo'||t.crEstados[cr].op!==op)throw new Error('La reversión cambió.');
+  if(f.revertida)return {};
+  if(!b||firmaDatos(b)!==f.firmaDespues)throw new Error(`La ficha ${id} cambió después del cierre. Se conserva ese cambio; requiere revisión antes de revertir.`);
+  return {writes:[[`bienes/${id}`,f.bien],[`${base}/filas/${id}`,{...f,revertida:true}]]};
+ });
+ await transaccionCR([`tomas/${tid}`,base],([t,a])=>{
+  if(estadoCR(t,cr)!=='revirtiendo'||t.crEstados[cr].op!==op)throw new Error('La reversión cambió.');
+  return {writes:[[`tomas/${tid}`,{...t,cierresEnCurso:Math.max(0,(t.cierresEnCurso||0)-1),crEstados:{...t.crEstados,[cr]:a.anterior}}],[base,{...a,estado:'anulada'}]]};
+ });
+}
+async function reabrirCR(tid,cr,motivo){
+ exigirAdmin();if(!String(motivo||'').trim())throw new Error('Indica el motivo de reapertura.');
+ return transaccionCR([`tomas/${tid}`],([t])=>{
+  if(!t||t._del||!esAnual(t)||estadoCR(t,cr)!=='cerrada')throw new Error('Solo se puede reabrir un CR cerrado de una toma anual.');
+  const s=t.crEstados[cr],reabrirAnio=t.estado==='cerrada'?{estado:'abierta',cierre:null,uCierre:null,reaperturasAnuales:[...(t.reaperturasAnuales||[]),{cierre:t.cierre,u:S.me,motivo:String(motivo).trim(),t:nowIso()}]}:{};return {writes:[[`tomas/${tid}`,{...t,...reabrirAnio,crEstados:{...t.crEstados,[cr]:{...s,estado:'abierta',reaperturas:[...(s.reaperturas||[]),{motivo:String(motivo).trim(),u:S.me,t:nowIso()}]}}}]]};
+ });
+}
+async function finalizarAnual(tid){
+ exigirAdmin();return transaccionCR([`tomas/${tid}`],([t])=>{
+  if(!esAnual(t)||t.estado!=='abierta'||Object.values(t.crPorBien).includes(SIN_CR)||Object.values(t.crEstados).some(s=>s.estado!=='cerrada')||(t.sobrantes||[]).some(s=>!s.cr||s.cr===SIN_CR))throw new Error('Cierra todos los CR y asigna los bienes y sobrantes sin CR antes de finalizar el año.');
+  const p=avanceCR({id:tid,...t});return {writes:[[`tomas/${tid}`,{...t,estado:'cerrada',cierre:nowIso(),uCierre:S.me,resumen:{...p,sob:(t.sobrantes||[]).length}}]]};
+ });
+}
+function fechaActaCR(v){
+ const f=fechaNormalizada(v);return f&&typeof f==='object'&&Number.isFinite(f.v)?{v:Math.floor(f.v),s:'fecha'}:'';
+}
+function hojasActaCR(a,F){
+ const rows=a.ids.map(id=>F[id]);if(a.estado!=='definitiva'||rows.some(f=>!f||f.cr!==a.cr||f.revertida))throw new Error('El acta aún no es definitiva o está incompleta.');
+ const meta=a.meta||{},s=a.resumen,netoNoLocalizados=s.valorNetoNoLocalizados??rows.filter(f=>f.resultado==='No localizado').reduce((n,f)=>n+(Number(f.bien.valorNeto)||0),0),nombre=a.crNombre||a.cr,cab=[[{v:'ACTA DE CIERRE POR CENTRO DE RESPONSABILIDAD',s:'t'}],[meta.razon||'Sociedad Bíblica Peruana'],[`RUC: ${meta.ruc||''} · Período: ${meta.periodo||''}`],[`${a.tomaNombre} · ${nombre}`],[`Cierre: ${fmtDT(a.fecha)} · Versión ${a.version} · DEFINITIVA`],[`Administrador: ${a.nombreAdministrador}`]];
+ const sheet=(name,heads,data,cols)=>({name,rows:[...cab,heads.map(v=>({v,s:'h'})),...data],cols,freeze:7,titles:'7',grid:false,foot:`${a.tomaNombre} · CR ${a.cr} · v${a.version}`});
+ const acta=sheet('Acta',['Resultado','Cantidad / importe'],[['Bienes del CR',s.tot],['Encontrados',s.enc],['Por conciliar',0],['No localizados',s.nol],['Pendientes',0],['Valor histórico total de los no localizados',{v:s.valorHistoricoNoLocalizados,s:'m'}],['Valor neto total de los no localizados',{v:netoNoLocalizados,s:'m'}],['Sobrantes del CR (unidades)',s.sob],[],['Firmas'],['Inventariador','Responsable del CR','Administrador'],['Nombre:','Nombre:','Nombre:'],['Firma:','Firma:','Firma:'],['Fecha:','Fecha:','Fecha:']],[58,28,28]);
+ const heads=['ID etiqueta','Código ADM','Código contable','Descripción','CR','Resultado','Valor histórico','Valor neto','Ubicación encontrada','Conservación','Operatividad','Observación','Inventariador','Fecha de registro'];
+ const fila=f=>{const b=f.bien,c=f.conteo||{},en=f.resultado==='Encontrado';return [b.idEtq??'',b.codigo||f.bienId,b.codCont||'',b.nombre||'',a.cr,f.resultado,{v:Number(b.valorHist)||0,s:'m'},{v:Number(b.valorNeto)||0,s:'m'},en?ubic(c):'',en?c.c||'':'',en?c.o||'':'',c.obs||'',f.inventariador||'',fechaActaCR(c.t)];};
+ const detalle=sheet('Detalle',heads,rows.map(fila),[16,24,24,58,18,22,22,22,50,20,20,55,28,24]);
+ const hall=sheet('Hallazgos',heads,[...rows.filter(f=>f.resultado!=='Encontrado').map(fila),[],['SOBRANTES DEL CR'],['Descripción','Cantidad','CR','Ubicación','Marca','Modelo','Serie','Conservación','Operatividad','Observación','Registrado por','Fecha','Unidades regularizadas'],...a.sobrantes.map(x=>[x.d,Number(x.cant)||1,a.cr,x.ub||'',x.marca||'',x.modelo||'',x.serie||'',x.c||'',x.o||'',x.nota||'',x.inventariador||'',fechaActaCR(x.t),(x.regIds||[]).length||(x.reg?1:0)])],[22,24,24,58,20,22,22,22,50,20,28,55,28,24]);
+ return [acta,detalle,hall];
+}
+async function descargarActaCR(tid,op){
+ const base=`tomas/${tid}/actasCR/${op}`,a=await leerCR(base),F=await coleccionCR(`${base}/filas`);if(!a)throw new Error('Acta no disponible.');
+ const blob=await xlsxBlob(hojasActaCR(a,F));await guardarArchivo(`Acta_${fileSafe(a.tomaNombre)}_CR${a.cr}_${a.fechaArchivo}_v${a.version}.xlsx`,blob);
+}
+async function editarSobrantesCR(tid,fn){
+ return transaccionCR([`tomas/${tid}`],([t])=>{
+  if(!t||t.estado!=='abierta')throw new Error('La toma ya no está abierta.');
+  const nuevo=fn(structuredClone(t.sobrantes||[]),t);
+  const removed=(t.sobrantes||[]).filter(x=>!nuevo.some(y=>firmaDatos(x)===firmaDatos(y))),added=nuevo.filter(x=>!(t.sobrantes||[]).some(y=>firmaDatos(x)===firmaDatos(y)));
+  for(const s of [...removed,...added])if(estadoCR(t,s.cr||SIN_CR)!=='abierta')throw new Error('No se modifican sobrantes de un CR cerrado o en proceso.');
+  return {writes:[[`tomas/${tid}`,{...t,sobrantes:nuevo}]]};
+ });
+}
+function opcionesCRabiertos(t){return Object.keys(t.crEstados||{}).filter(cr=>cr!==SIN_CR&&estadoCR(t,cr)==='abierta').map(cr=>[cr,nombreCR(cr)]);}
+function elegirCR(t){return {k:'cr',l:'Centro de responsabilidad',t:'select',opts:[['','Elige el CR…'],...opcionesCRabiertos(t)],v:S.anCR!==SIN_CR?S.anCR||'':'',req:true,full:true};}
+const ACTprevAnual={...ACT};
+for(const n of ['tNueva','anAdaptar','anCerrar','anContinuar','anRevertir','anReabrir','anFinalizar','anIncorporar'])ADMIN_ACT.add(n);
+RO_OK.push('anVer','anTodos','anConciliar','anActas','anDescargar');
+Object.assign(ACT,{
+ anAdaptar(){const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]},ids=t.esperados||[],e=estructuraAnual(ids);openForm({title:'Adaptar a toma anual por CR',note:`Se conservan <b>${esc(t.nombre)}</b>, sus <b>${ids.length}</b> bienes y todos sus conteos. Solo se fija la pertenencia por CR.<ul>${Object.keys(e.crEstados).map(cr=>`<li>${esc(nombreCR(cr))}: ${Object.values(e.crPorBien).filter(c=>c===cr).length} bienes</li>`).join('')}</ul>Los bienes sin CR quedan en revisión; no se asignan por ubicación. Las etiquetas no cambian. Descarga primero el respaldo completo.`,fields:[{k:'conf',l:'Escribe ADAPTAR',req:true}],ok:'Adaptar sin modificar conteos',submit:async v=>{if(v.conf!=='ADAPTAR')return {error:'Escribe ADAPTAR.'};await adaptarAnual(t.id,structuredClone(ids),e.crPorBien);S.anCR=null;toast('Toma adaptada. Se conservaron sus conteos y etiquetas.');}});},
+ anVer(cr){S.anCR=cr;S.tCR='';S.tPrioridad='';S.tActivoFiltro='';S.tq='';S.tAmb='';S.tf='todos';S.tGroup='';S.tlim=PAGE;render();},
+ anTodos(){S.anCR=null;S.tCR='';S.tPrioridad='';S.tActivoFiltro='';S.tq='';S.tAmb='';S.tf='todos';render();},
+ anConciliar(cr){$('#modal').close();ACT.anVer(cr);S.tf='conciliar';S.tView='lista';render();},
+ async anCerrar(cr){
+  exigirAdmin();const t=await refrescarTomaCR(S.tomaSel),p=avanceCR(t,cr),huella=huellaCierreCR(t,cr),revision=await cambiosPosterioresCR(t,cr),otros=usuariosRecientes(t.id,Date.now(),cr).filter(x=>x.u!==S.me);
+  const note=`${revision.cambios.length?`<p class="err">${revision.cambios.length} fichas cambiaron después del acta anterior: ${revision.cambios.map(x=>esc(x.etiqueta?'ID '+x.etiqueta:x.codigo)+(x.otraToma?' (cierre en otra toma)':'')).join(', ')}. Revisa las fichas antes de aplicar este cierre.</p>`:''}<b>${esc(nombreCR(cr))}</b><p>${p.tot} bienes del CR · ${p.enc} encontrados · ${p.conc} por conciliar · ${p.nol} no localizados · ${p.pend} pendientes.</p><p><b>${p.pend} pendientes pasarán a «No localizado».</b> Se actualizarán únicamente las ${p.tot} fichas de este CR.</p><p>Bienes de otros CR (no se tocan): <b>${(t.esperados||[]).length-p.tot}</b>.</p><button type="button" class="btn link" data-act="anConciliar" data-id="${esc(cr)}">Ver por conciliar</button>${p.conc?'<p class="err">Resuelve los bienes por conciliar antes de cerrar.</p>':''}${otros.length?`<p class="err">Actividad reciente en este CR: ${otros.map(x=>esc(who(x.u))).join(', ')}. Coordina antes de cerrar.</p>`:''}<p>Se generará el Excel de este CR: Acta, Detalle y Hallazgos, incluidos sus sobrantes y los valores histórico y neto totales de sus no localizados.</p>`;
+  openForm({title:'Cerrar CR',note,danger:true,ok:p.conc?'Resolver por conciliar':'Cerrar CR y descargar acta',fields:p.conc?[]:[...(revision.cambios.length?[{k:'cambios',l:'Cambios posteriores al acta anterior',t:'select',opts:[['','Revisar primero'],['si','Revisé las fichas; aplicar los resultados de este cierre']],req:true,full:true}]:[]),...(otros.length?[{k:'actividad',l:'Actividad reciente',t:'select',opts:[['','Coordinar primero'],['si','Ya coordiné; continuar']],req:true,full:true}]:[]),{k:'conf',l:`Escribe CERRAR ${cr}`,req:true,full:true}],submit:async v=>{
+   exigirAdmin();if(p.conc){ACT.anConciliar(cr);return;}
+   if(v.conf!==`CERRAR ${cr}`)return {error:`Escribe CERRAR ${cr}.`};
+   const op=await comenzarCierreCR(t.id,cr,huella,otros.map(x=>x.u),revision.firmas);await ejecutarCierreCR(t.id,cr,op);
+  }});
+ },
+ async anContinuar(cr){exigirAdmin();const t=await refrescarTomaCR(S.tomaSel),op=t.crEstados?.[cr]?.op;if(estadoCR(t,cr)==='revirtiendo')return ACT.anRevertir(cr);openForm({title:'Continuar cierre del CR',note:`Se retomará únicamente el cierre de ${esc(nombreCR(cr))}. Las fichas ya procesadas no se aplican dos veces.`,fields:[],ok:'Continuar cierre',submit:()=>ejecutarCierreCR(t.id,cr,op)});},
+ anRevertir(cr){const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]};openForm({title:'Revertir cierre incompleto del CR',note:'Solo se revierten las fichas que aplicó ese cierre y que no cambiaron después. Los conteos se conservan. No se tocan otros CR.',fields:[{k:'conf',l:`Escribe REVERTIR ${cr}`,req:true}],danger:true,ok:'Revertir cierre incompleto',submit:async v=>{exigirAdmin();if(v.conf!==`REVERTIR ${cr}`)return {error:`Escribe REVERTIR ${cr}.`};await revertirCierreCR(t.id,cr,t.crEstados[cr].op);toast('Cierre revertido; CR abierto con sus conteos intactos.');}});},
+ anReabrir(cr){const tid=S.tomaSel;openForm({title:'Reabrir CR',note:'La reapertura habilita sus registros; no revierte fichas automáticamente. Si el año estaba finalizado, volverá a estar abierto. El acta anterior se conserva y el siguiente cierre emitirá una nueva versión.',fields:[{k:'motivo',l:'Motivo de reapertura',t:'textarea',req:true,full:true}],ok:'Reabrir CR',submit:async v=>{await reabrirCR(tid,cr,v.motivo);toast('CR abierto para revisión.');}});},
+ anFinalizar(){const tid=S.tomaSel;openForm({title:'Finalizar toma anual',note:'Requiere todos los CR cerrados y ningún bien ni sobrante sin CR. Solo cambia el estado de la toma: no vuelve a actualizar fichas ni convierte pendientes.',fields:[{k:'conf',l:'Escribe FINALIZAR',req:true}],ok:'Finalizar año',submit:async v=>{if(v.conf!=='FINALIZAR')return {error:'Escribe FINALIZAR.'};await finalizarAnual(tid);toast('Año finalizado sin volver a modificar fichas.');}});},
+ async anActas(cr){const t=S.data.tomas[S.tomaSel],L=[];for(const op of t.crEstados[cr].actas||[]){const a=await leerCR(`tomas/${S.tomaSel}/actasCR/${op}`);if(a?.estado==='definitiva')L.push({op,a});}openForm({title:`Actas de ${nombreCR(cr)}`,note:L.map(({op,a})=>`<p>Versión ${a.version} · ${esc(fmtDT(a.fecha))} <button type="button" class="btn" data-act="anDescargar" data-id="${esc(op)}">Descargar Excel</button></p>`).join('')||'Sin actas definitivas.',fields:[],ok:'Listo',submit:()=>{}});},
+ anDescargar(op){return descargarActaCR(S.tomaSel,op);},
+ anIncorporar(){const tid=S.tomaSel,t=S.data.tomas[tid];const crOpts=[...new Set([...Object.keys(t.crEstados||{}),...Object.keys(S.data.config.crPrioridad?.crs||{})])].filter(cr=>cr!==SIN_CR&&estadoCR(t,cr)==='abierta');openForm({title:'Incorporar bien o resolver CR',note:'Las asignaciones existentes quedan fijas. Puedes incorporar una alta o asignar un bien que estaba «Sin CR». No se incorporan bienes a un CR cerrado.',fields:[{k:'id',l:'ID de etiqueta o código ADM',req:true,full:true},{k:'cr',l:'CR de esta toma',t:'select',opts:[['','Elige…'],...crOpts.map(cr=>[cr,nombreCR(cr)])],req:true,full:true},{k:'conf',l:'Escribe INCORPORAR',req:true}],ok:'Confirmar incorporación',submit:async v=>{
+  exigirAdmin();if(v.conf!=='INCORPORAR')return {error:'Escribe INCORPORAR.'};const b=bienes().find(b=>b.codigo===v.id||b.id===v.id||String(b.idEtq)===v.id);if(!b)return {error:'Bien no encontrado.'};
+  await transaccionCR([`tomas/${tid}`,`bienes/${b.id}`],([actual,bien])=>{
+   if(!bien||actual.estado!=='abierta'||estadoCR(actual,v.cr)!=='abierta')throw new Error('La toma o el CR ya no están abiertos.');
+   if(actual.crPorBien[b.id]&&actual.crPorBien[b.id]!==SIN_CR)throw new Error('El bien ya tiene un CR fijo en esta toma.');
+   const mapa={...actual.crPorBien,[b.id]:v.cr},estados={...actual.crEstados,[v.cr]:actual.crEstados[v.cr]||{estado:'abierta',version:0,actas:[]}};if(!Object.values(mapa).includes(SIN_CR))delete estados[SIN_CR];
+   return {writes:[[`tomas/${tid}`,{...actual,miembroEditado:b.id,esperados:[...new Set([...actual.esperados,b.id])],crPorBien:mapa,crEstados:estados}]]};
+  });toast('Bien incorporado al CR de esta toma.');
+ }});},
+ tSobrante(){const t=S.data.tomas[S.tomaSel];if(!esAnual(t))return ACTprevAnual.tSobrante();const tid=S.tomaSel;openForm({title:'Registrar sobrante del CR',note:'El CR se elige expresamente, aunque el sobrante esté físicamente en otra área.',fields:[elegirCR(t),{k:'d',l:'Descripción',req:true,full:true,v:S._pendSob||''},{k:'cant',l:'Cantidad',t:'number',v:1,req:true},F.marca(),F.modelo(),F.serie(),F.condicion(S.here.c),F.oper(S.here.o),{k:'ub',l:'Dónde se encontró',v:ubic(S.here),full:true},{k:'nota',l:'Observación',full:true}],ok:'Guardar sobrante',submit:async v=>{if(!Number.isSafeInteger(v.cant)||v.cant<1)return {error:'Usa una cantidad entera mayor que cero.'};await editarSobrantesCR(tid,arr=>[...arr,{id:uid(),cr:v.cr,d:v.d,cant:v.cant,marca:v.marca,modelo:v.modelo,serie:v.serie,c:v.condicion,o:v.oper,ub:v.ub,nota:v.nota,u:S.me,t:nowIso()}]);S._pendSob='';toast('Sobrante asignado al CR.');}});},
+ tSobDel(i){const tid=S.tomaSel,t=S.data.tomas[tid];if(!esAnual(t))return ACTprevAnual.tSobDel(i);const s=t.sobrantes[Number(i)];return editarSobrantesCR(tid,arr=>{const j=arr.findIndex(x=>firmaDatos(x)===firmaDatos(s));if(j<0)throw new Error('El sobrante cambió. Revisa de nuevo.');arr.splice(j,1);return arr;});},
+ anSobAsignar(i){const tid=S.tomaSel,t=S.data.tomas[tid],s=structuredClone(t.sobrantes[Number(i)]);openForm({title:'Asignar sobrante a CR',note:esc(s.d),fields:[elegirCR(t)],ok:'Asignar CR',submit:v=>editarSobrantesCR(tid,arr=>{const j=arr.findIndex(x=>firmaDatos(x)===firmaDatos(s));if(j<0)throw new Error('El sobrante cambió.');arr[j]={...arr[j],cr:v.cr};return arr;})});},
+ tCerrar(){const t=S.data.tomas[S.tomaSel];if(esAnual(t))return ACT.anFinalizar();return ACTprevAnual.tCerrar();},
+ tEliminar(){const t=S.data.tomas[S.tomaSel];if(esAnual(t)&&Object.values(t.crEstados).some(s=>s.estado!=='abierta'||s.actas?.length))return toast('Esta toma tiene cierres por CR. Revisa sus actas; no se elimina mediante «Eliminar toma».');return ACTprevAnual.tEliminar();},
+ openToma(id){S.anCR=null;return ACTprevAnual.openToma(id);},
+ tNueva(){
+  exigirAdmin();const mes=new Date().toLocaleDateString('es-PE',{month:'long',year:'numeric'}),opts=[['','Todos los bienes en uso'],...distinct('area').map(x=>['area:'+x,'Área: '+x]),...distinct('sede').map(x=>['sede:'+x,'Sede: '+x]),...distinct('categoria').map(x=>['grupo:'+x,'Grupo: '+x])];
+  openForm({title:'Nueva toma anual',fields:[{k:'nombre',l:'Nombre',v:`Inventario ${new Date().getFullYear()}`,full:true,req:true},{k:'alcance',l:'Alcance',t:'select',opts,full:true}],ok:'Revisar bienes',submit:async v=>{
+   const [k,...rest]=(v.alcance||'').split(':'),fld={area:'area',sede:'sede',grupo:'categoria'}[k],val=rest.join(':'),ids=bienes().filter(b=>ACTIVOS.includes(b.etapa)&&(!fld||(b[fld]||'')===val)).map(b=>b.id);if(!ids.length)return {error:'No hay bienes con ese alcance.'};
+   const coincidencias=await coincidenciasTomas(ids),firma=firmaDatos(coincidencias);
+   openForm({title:coincidencias.length?'Hay bienes en otra toma abierta':'Confirmar nueva toma anual',note:`<b>${ids.length}</b> bienes.<ul>${coincidencias.map(x=>`<li><b>${esc(x.nombre)}</b>: ${x.ids.length} bienes compartidos. IDs ${esc(rangoIds(x.ids.map(id=>S.data.bienes[id]?.idEtq).filter(Number.isFinite))||'sin etiqueta')}. CR: ${esc([...new Set(x.ids.map(id=>S.data.bienes[id]?crActual(S.data.bienes[id]):SIN_CR))].join(', '))}.</li>`).join('')}</ul>${coincidencias.length?'<p class="err">Cada toma conserva sus propios conteos. Cerrar el mismo bien en distintas tomas puede actualizar su ficha con resultados diferentes. Continúa solo si has coordinado ese trabajo.</p>':''}`,fields:[{k:'conf',l:coincidencias.length?'Escribe CREAR OTRA TOMA para continuar como administrador':'Escribe CREAR',req:true,full:true}],ok:'Crear toma anual',submit:async w=>{
+    exigirAdmin();if(w.conf!==(coincidencias.length?'CREAR OTRA TOMA':'CREAR'))return {error:'Escribe la confirmación indicada.'};
+    if(firmaDatos(await coincidenciasTomas(ids))!==firma)throw new Error('Las tomas abiertas cambiaron. Vuelve a revisar la creación.');
+    const id=uid();await put('tomas',id,{nombre:v.nombre||`Toma física ${mes}`,alcance:v.alcance,estado:'abierta',creado:nowIso(),u:S.me,esperados:ids,sobrantes:[],...estructuraAnual(ids),coincidenciasAceptadas:coincidencias,aceptacion:S.me});ACT.openToma(id);location.hash='inventario';toast('Toma anual creada.');
+   }});return {keep:true};
+  }});
+ }
+});
+async function coincidenciasTomas(ids){
+ const T=DB?await coleccionCR('tomas'):S.data.tomas,esp=new Set(ids);
+ return Object.entries(T).filter(([,t])=>t.estado==='abierta').map(([id,t])=>({id,nombre:t.nombre,ids:(t.esperados||[]).filter(bid=>esp.has(bid)).sort()})).filter(x=>x.ids.length).sort((a,b)=>a.id.localeCompare(b.id));
+}
 
 Object.assign(ACT,{tMoverConflicto(i){const e=S.conteosConflictos?.[Number(i)];if(e)mostrarConflicto(e);}});
 // Las invocaciones directas se validan igual que los clics; los formularios revalidan al confirmar.
