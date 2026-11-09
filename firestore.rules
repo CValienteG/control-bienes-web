@@ -5,19 +5,188 @@ service cloud.firestore {
     function perfil() { return get(/databases/$(db)/documents/usuarios/$(request.auth.uid)).data; }
     function activo() { return signed() && exists(/databases/$(db)/documents/usuarios/$(request.auth.uid)) && perfil().activo == true; }
     function admin() { return activo() && perfil().rol == 'admin'; }
+    function anual(t) { return t.get('anualCR', 0) == 1; }
+    function viva(t) { return t.get('_del', false) == false && t.estado == 'abierta'; }
+    function toma(tid) { return get(/databases/$(db)/documents/tomas/$(tid)).data; }
+    function tomaDespues(tid) { return getAfter(/databases/$(db)/documents/tomas/$(tid)).data; }
+    function estado(t, cr) { return t.get('crEstados', {}).get(cr, {}).get('estado', 'abierta'); }
+    function abierto(t, cr) { return viva(t) && estado(t, cr) == 'abierta'; }
+    function crBien(t, bid) { return t.get('crPorBien', {}).get(bid, 'SIN_CR'); }
+    function revision(t, cr) { return t.crEstados[cr].get('revision', 0); }
+    function formaAnual(t) {
+      return t.anualCR == 1 && t.crPorBien is map && t.crEstados is map
+        && t.esperados is list && t.crPorBien.keys().hasAll(t.esperados)
+        && t.crPorBien.keys().hasOnly(t.esperados);
+    }
+    function revisionUsuario(a, b) {
+      let cambios = b.crEstados.diff(a.crEstados).affectedKeys();
+      let cr = b.get('crEditado', '');
+      return cambios.size() == 1 && cambios.hasOnly([cr]) && abierto(a, cr) && cr != 'SIN_CR'
+        && b.crEstados[cr].diff(a.crEstados[cr]).affectedKeys().hasOnly(['revision'])
+        && revision(b, cr) == revision(a, cr) + 1;
+    }
+    function sobranteAbierto(t, lista) {
+      return lista.size() == 0 || (lista.size() == 1 && abierto(t, lista[0].get('cr', 'SIN_CR')));
+    }
+    function sobrantesEditables(a, b) {
+      let nuevos = b.get('sobrantes', []).removeAll(a.get('sobrantes', []));
+      let quitados = a.get('sobrantes', []).removeAll(b.get('sobrantes', []));
+      return sobranteAbierto(a, nuevos) && sobranteAbierto(a, quitados)
+        && b.sobrantes.size() == a.get('sobrantes', []).size() + nuevos.size() - quitados.size();
+    }
+    function regularizarSobrante(a, b) {
+      let nuevos = b.sobrantes.removeAll(a.sobrantes);
+      let quitados = a.sobrantes.removeAll(b.sobrantes);
+      return admin() && nuevos.size() == 1 && quitados.size() == 1
+        && nuevos[0].diff(quitados[0]).affectedKeys().hasOnly(['reg', 'regIds'])
+        && estado(a, nuevos[0].cr) == 'cerrada';
+    }
+    function pertenenciaFija(a, b) {
+      let diferencia = b.crPorBien.diff(a.crPorBien);
+      let cambiados = diferencia.changedKeys();
+      let id = b.get('miembroEditado', '');
+      return formaAnual(b) && diferencia.removedKeys().size() == 0
+        && (cambiados.size() == 0 || (cambiados.size() == 1 && cambiados.hasOnly([id]) && a.crPorBien[id] == 'SIN_CR'
+          && abierto(a, b.crPorBien[id])))
+        && diferencia.addedKeys().size() <= 1 && diferencia.addedKeys().hasOnly([id])
+        && (diferencia.addedKeys().size() == 0 || abierto(b, b.crPorBien[id]));
+    }
+    function usuarioToma(a, b) {
+      let cambios = b.diff(a).affectedKeys();
+      return viva(a) && viva(b) && (
+        (!anual(a) && cambios.hasOnly(['sobrantes', '_m'])) ||
+        (anual(a) && anual(b) && (
+          (cambios.hasOnly(['crEstados', 'crEditado', '_m']) && revisionUsuario(a, b)) ||
+          (cambios.hasOnly(['sobrantes', '_m']) && sobrantesEditables(a, b))
+        ))
+      );
+    }
+    function adminToma(a, b) {
+      return admin() && (
+        (!anual(a) && (!anual(b) || (formaAnual(b) && viva(a) && viva(b)
+          && b.esperados == a.esperados && b.sobrantes == a.sobrantes))) ||
+        (anual(a) && anual(b) && b.get('_del', false) == false && pertenenciaFija(a, b)
+          && (b.sobrantes == a.sobrantes || sobrantesEditables(a, b) || regularizarSobrante(a, b))) ||
+        (anual(a) && b.get('_del', false) == true && a.get('cierresRealizados', 0) == 0
+          && a.get('cierresEnCurso', 0) == 0)
+      );
+    }
+    function conteoEditable(tid, bid) {
+      let t = toma(tid);
+      let despues = tomaDespues(tid);
+      let cr = crBien(t, bid);
+      return vivoConteo(t) && (!anual(t) || (
+        cr != 'SIN_CR' && bid in t.crPorBien && abierto(t, cr)
+        && despues.crPorBien == t.crPorBien && abierto(despues, cr)
+        && revision(despues, cr) == revision(t, cr) + 1
+      ));
+    }
+    function vivoConteo(t) { return viva(t); }
+    function cierreValido(bid, inv) {
+      let t = toma(inv.tomaId);
+      let cr = crBien(t, bid);
+      return admin() && anual(t) && viva(t) && cr != 'SIN_CR'
+        && inv.get('cr', '') == cr && estado(t, cr) == 'cerrando'
+        && inv.get('cierreCR', '') == t.crEstados[cr].op;
+    }
+    function invPermitida(bid, inv) {
+      return !(inv is map) || !('tomaId' in inv)
+        || !exists(/databases/$(db)/documents/tomas/$(inv.tomaId))
+        || !anual(toma(inv.tomaId)) || cierreValido(bid, inv);
+    }
+    function reversionValida(bid, antes, despues) {
+      let inv = antes.get('inv', {});
+      let t = toma(inv.tomaId);
+      let cr = crBien(t, bid);
+      let fila = getAfter(/databases/$(db)/documents/tomas/$(inv.tomaId)/actasCR/$(inv.cierreCR)/filas/$(bid)).data;
+      return admin() && anual(t) && estado(t, cr) == 'revirtiendo'
+        && t.crEstados[cr].op == inv.cierreCR && fila.get('revertida', false) == true
+        && despues.diff(fila.bien).affectedKeys().hasOnly(['_m']);
+    }
+    function resultadoAnual(a) {
+      let inv = a.get('inv', {});
+      return inv is map && 'tomaId' in inv
+        && exists(/databases/$(db)/documents/tomas/$(inv.tomaId)) && anual(toma(inv.tomaId));
+    }
+    function fichaBloqueada(a) {
+      let inv = a.get('inv', {});
+      return inv is map && 'tomaId' in inv && 'cierreCR' in inv && 'cr' in inv
+        && exists(/databases/$(db)/documents/tomas/$(inv.tomaId))
+        && anual(toma(inv.tomaId))
+        && estado(toma(inv.tomaId), inv.cr) in ['cerrando', 'revirtiendo']
+        && toma(inv.tomaId).crEstados[inv.cr].get('op', '') == inv.cierreCR;
+    }
+    function fichaEditable(bid, a, b) {
+      return (!fichaBloqueada(a) || reversionValida(bid, a, b)) && (
+        !b.diff(a).affectedKeys().hasAny(['inv'])
+        || (admin() && ((!resultadoAnual(a) && invPermitida(bid, b.get('inv', null)))
+          || (b.get('inv', null) is map && 'tomaId' in b.inv && cierreValido(bid, b.inv))
+          || (a.get('inv', null) is map && 'cierreCR' in a.inv && reversionValida(bid, a, b)))));
+    }
+    function actaEnProceso(tid, op, a) {
+      let t = tomaDespues(tid);
+      return admin() && anual(t) && viva(t) && a.cr != 'SIN_CR'
+        && estado(t, a.cr) == 'cerrando' && t.crEstados[a.cr].op == op;
+    }
 
     match /usuarios/{uid} {
       allow read: if signed() && (request.auth.uid == uid || activo());
       allow create: if signed() && request.auth.uid == uid
-        && request.resource.data.activo == false
-        && request.resource.data.rol == 'usuario'
+        && request.resource.data.activo == false && request.resource.data.rol == 'usuario'
         && request.resource.data.keys().hasOnly(['nombre', 'email', 'activo', 'rol', 'creado']);
       allow update: if admin() && request.auth.uid != uid;
       allow delete: if false;
     }
-
+    match /tomas/{tid} {
+      allow read: if activo();
+      allow create: if admin() && (!anual(request.resource.data) ||
+        (formaAnual(request.resource.data) && viva(request.resource.data)));
+      allow update: if activo() && (adminToma(resource.data, request.resource.data)
+        || usuarioToma(resource.data, request.resource.data));
+      allow delete: if false;
+      match /conteos/{bid} {
+        allow read: if activo();
+        allow create, update: if activo() && conteoEditable(tid, bid)
+          && (request.resource.data.get('_del', false) == true || (
+            request.resource.data.u == request.auth.uid && request.resource.data.r in ['Encontrado', 'Por conciliar', 'No localizado']
+          ));
+        allow delete: if false;
+      }
+      match /actasCR/{op} {
+        allow read: if activo();
+        allow create: if request.resource.data.estado == 'proceso'
+          && actaEnProceso(tid, op, request.resource.data);
+        allow update: if admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'resumen', '_m'])
+          && resource.data.estado == 'proceso' && (
+            (request.resource.data.estado == 'definitiva' && estado(toma(tid), resource.data.cr) == 'cerrando' && toma(tid).crEstados[resource.data.cr].op == op
+              && estado(tomaDespues(tid), resource.data.cr) == 'cerrada') ||
+            (request.resource.data.estado == 'anulada' && estado(toma(tid), resource.data.cr) == 'revirtiendo')
+          );
+        allow delete: if false;
+        match /filas/{bid} {
+          allow read: if activo();
+          allow create: if admin()
+            && actaEnProceso(tid, op, get(/databases/$(db)/documents/tomas/$(tid)/actasCR/$(op)).data)
+            && crBien(toma(tid), bid) == request.resource.data.cr
+            && request.resource.data.cr == get(/databases/$(db)/documents/tomas/$(tid)/actasCR/$(op)).data.cr
+            && getAfter(/databases/$(db)/documents/bienes/$(bid)).data.inv.cierreCR == op;
+          allow update: if admin() && estado(toma(tid), resource.data.cr) == 'revirtiendo'
+            && toma(tid).crEstados[resource.data.cr].op == op
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revertida', '_m'])
+            && request.resource.data.revertida == true;
+          allow delete: if false;
+        }
+      }
+    }
+    match /bienes/{bid} {
+      allow read: if activo();
+      allow create: if activo() && invPermitida(bid, request.resource.data.get('inv', null));
+      allow update: if activo() && fichaEditable(bid, resource.data, request.resource.data);
+      allow delete: if false;
+    }
+    // Evita que una regla general anule las protecciones de tomas y fichas.
     match /{col}/{rest=**} {
-      allow read, write: if col != 'usuarios' && activo();
+      allow read, write: if col != 'usuarios' && col != 'tomas' && col != 'bienes' && activo();
     }
   }
 }
