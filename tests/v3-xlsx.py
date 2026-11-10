@@ -4,10 +4,12 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 folder = Path(sys.argv[1])
-headers = ['ID', 'CÓDIGO CONTABLE', 'ACTIVO (grupo)', 'CÓDIGO ADMINISTRACIÓN',
+headers = ['ID', 'CÓDIGO CONTABLE', 'AGRUPADOR', 'ACTIVO', 'MARCA', 'MODELO',
+           'SERIE / PLACA', 'FECHA DE ADQUISICIÓN', 'CÓDIGO ADMINISTRACIÓN',
            'CÓDIGO CR', 'CR', 'Prioridad CR', 'RESULTADO', 'FECHA DE INVENTARIO',
            'EDIFICIO', 'PISO', 'UBICACIÓN', 'CANTIDAD', 'OPERATIVIDAD',
            'CONSERVACIÓN', 'CUSTODIO', 'OBSERVACIONES']
+consulta = 13
 for tipo in ('anual', 'puntual'):
     for alcance in ('20312', 'todos'):
         path = folder / f'nueva-{tipo}-{alcance}.xlsx'
@@ -17,17 +19,18 @@ for tipo in ('anual', 'puntual'):
         assert ws.max_row == (152 if alcance == '20312' else 154)
         assert ws.freeze_panes == 'A2'
         table = ws.tables['RelacionesCRAFV3']
-        assert table.ref == f'A1:Q{ws.max_row}'
+        assert table.ref == f'A1:V{ws.max_row}'
         assert table.autoFilter.ref == table.ref
         assert not table.tableStyleInfo.showRowStripes
         for row in ws:
-            assert all(c.fill.fgColor.rgb == 'FFF1F3F0' for c in row[:8])
-            assert all(c.fill.fgColor.rgb == 'FFFFF8DC' for c in row[8:])
-        assert ws['I2'].number_format == 'dd/mm/yyyy'
+            assert all(c.fill.fgColor.rgb == 'FFF1F3F0' for c in row[:consulta])
+            assert all(c.fill.fgColor.rgb == 'FFFFF8DC' for c in row[consulta:])
+        assert ws['N2'].number_format == 'dd/mm/yyyy'
+        assert ws['C2'].value == 'SILLAS' and ws['D2'].value == 'Silla de prueba'
         validations = ws.data_validations.dataValidation
         # Edificio, piso y ubicación son texto libre: solo hay listas en operatividad y conservación.
         assert len(validations) == 3
-        assert {str(d.sqref).split(':')[0] for d in validations} == {'M2', 'N2', 'O2'}
+        assert {str(d.sqref).split(':')[0] for d in validations} == {'R2', 'S2', 'T2'}
         assert set(wb.defined_names.keys()) >= {'V3Operatividad', 'V3Conservacion'}
         assert not {'V3Edificios', 'V3Pisos', 'V3Ambientes'} & set(wb.defined_names.keys())
         for dv in validations:
@@ -41,4 +44,4 @@ for tipo in ('anual', 'puntual'):
         assert wb['Listas'].sheet_state == 'hidden'
         assert 'Léeme' in wb.sheetnames
         assert all(c.data_type != 'f' for row in ws for c in row)
-        print('OK XLSX:', tipo, alcance, 'fila 1, 17 columnas, bloques, ubicación libre, dos listas, filtros, fecha e IDs fijos')
+        print('OK XLSX:', tipo, alcance, 'fila 1, 22 columnas, agrupador, bloques, ubicación libre, dos listas, filtros, fecha e IDs fijos')

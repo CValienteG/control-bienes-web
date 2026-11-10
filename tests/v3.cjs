@@ -13,7 +13,7 @@ async function filas(p,rows,tid='anual',name='prueba.xlsx'){const bytes=await p.
  for(const width of [1366,768,360]){
  const {p,browser}=await abrir(8781,width);
  const H=await p.evaluate(()=>V3_NUEVA_HEADERS),ubic=['Aula 401','áULA402','Aula 403','Depósito','Sala nueva','Otra sala'];
- const rows=Array.from({length:151},(_,i)=>[i+1,'P-'+String(i+1).padStart(6,'0'),'Silla de prueba','PRUEBA-'+String(i+1).padStart(4,'0'),20312,'Operaciones CCB',1,'','10/11/2026','CCB','4º piso',ubic[i%6],1,'Operativo','Bueno','','']);
+ const rows=Array.from({length:151},(_,i)=>{const v={'ID':i+1,'CÓDIGO CONTABLE':'P-'+String(i+1).padStart(6,'0'),'AGRUPADOR':'SILLAS','ACTIVO':'Silla de prueba','CÓDIGO ADMINISTRACIÓN':'PRUEBA-'+String(i+1).padStart(4,'0'),'CÓDIGO CR':20312,'CR':'Operaciones CCB','Prioridad CR':1,'FECHA DE INVENTARIO':'10/11/2026','EDIFICIO':'CCB','PISO':'4º piso','UBICACIÓN':ubic[i%6],'CANTIDAD':1,'OPERATIVIDAD':'Operativo','CONSERVACIÓN':'Bueno'};return H.map(h=>v[h]??'');});
  // 4º piso is intentionally a real-world floor variant.
  let r=await filas(p,[H,...rows],'anual','151-conteos.xlsx');
  assert.equal(r.enc,151);assert.equal(await p.locator('#v3-conf').count(),0);assert.equal(await p.locator('#mok').innerText(),'Importar 151 conteos');
