@@ -23,11 +23,14 @@ Todas las escrituras de prueba se hicieron con datos de ejemplo en modo local o 
 | Resultado final | Bienes guardados, omitidos y por revisar con enlaces; una fila pendiente aparece como omitida y revisable; un conteo simultáneo se conserva, no se cuenta como guardado y ofrece revisión del conflicto. |
 | Responsables de CR | Eduardo Barba precargado para 20312; edición y guardado en configuración; otro CR sin responsable importa con custodio vacío. |
 | Firestore oficial | SDK real contra emulador: 151 conteos anuales en dos lotes por CR, un conteo puntual, responsables y ubicaciones guardados con las reglas actuales. |
+| V3 real de todos los CR (versión publicada) | Archivo del usuario `V3_Toma_INVENTARIO_ACTIVO_FIJO_-_ANO_2026_Todos_CR.xlsx`: 1307 bienes, 34 CR, cabecera en fila 14 y 18 columnas; 479 conteos de CR 20312, 828 pendientes, sin errores ni columnas ignoradas. Con planos aproximados, 12 de 14 ubicaciones se resuelven solas; quedan Comedor (Almacenes, piso 6) y Almacén - Piso 01 (Almacenes, piso 4). Con los 479 conteos ya registrados, el botón queda en «Importar 0 conteos» y ofrece reemplazo explícito. |
+| Códigos contables en la toma | En la versión publicada, cada fila se comparaba con su propio bien: el archivo real mostraba 1305 avisos «ya existe en 1 bien de la base». Ahora solo se avisa si el código está en otro bien o se repite en el archivo: quedan los 2 casos reales (M-000954-D y M-000977-A). Prueba `tests/v3-codigos.cjs`. |
+| LibreOffice | La plantilla nueva con los 798 bienes de CR 20312 se abrió y guardó en LibreOffice: conserva inmovilización, seis validaciones, rangos con nombre y hoja oculta; reimporta 479 conteos y 319 pendientes sin errores. No sustituye la prueba en Excel. |
 | Regresión | Resumen y fichas con códigos compartidos; corrección contable con motivo e historial; etiqueta/ADM inmutables; marcar y desmarcar duplicados; alta Excel/CSV, Formato 7.1, toma anual y puntual, cierres, Hallazgos y actas congeladas. |
 
 ## Pendiente antes de integrar y publicar
 
-- Importar el archivo exacto `03-IMPORTACION_ACTIVO_FIJO-CR_20312-082026-V1.xlsx`. No se encontró en el entorno ni en la búsqueda de Drive.
+- Importar el archivo exacto `03-IMPORTACION_ACTIVO_FIJO-CR_20312-082026-V1.xlsx`, si aún se usará. No está en Descargas, Documentos ni Drive. Se probó en su lugar la V3 real de todos los CR.
 - Abrir una descarga nueva en **Microsoft Excel de escritorio**, comprobar que no solicita reparación, probar las cinco listas, filtros, inmovilización y guardado; volver a importar esa copia guardada desde Excel. El entorno disponible es Linux y no hay una sesión de Excel conectada. Las verificaciones con openpyxl no sustituyen esta prueba.
 
 No se modificó `firestore.rules` ni se publicaron reglas. No se modificaron datos reales. La integración en `main` y la publicación quedan pendientes de las dos comprobaciones anteriores. Verificar el SHA de `main` y la ejecución de Pages antes de comunicar que está publicado.
