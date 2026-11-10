@@ -1798,6 +1798,27 @@ async function ambNombresGuardar(){ const G=S._an||[]; const cambios=[]; const e
   finally{ S.busy=false; ok.disabled=false; } }
 document.addEventListener('input',e=>{ if(e.target.id==='an-q') anFiltrar(); });
 Object.assign(ACT,{ ambNombres(){ if(!planos().some(p=>(p.ambientes||[]).length)){ toast('Aún no hay ambientes dibujados.'); return; } ambNombresModal(); } });
+// En una toma anual, cada conteo sube la revisión de su CR en la toma. Borrarlos uno a uno compite por ese documento
+// y Firestore rechaza la mayoría; se borran en lotes de hasta 100 por CR, con una sola revisión por lote.
+async function borrarConteosToma(t,ids,onProg){
+  if(!esAnual(t))return runMany(ids.map(id=>()=>del(`tomas/${t.id}/conteos`,id)),4,onProg);
+  const grupos=new Map();for(const id of ids){const cr=crFijo(t,id);if(!grupos.has(cr))grupos.set(cr,[]);grupos.get(cr).push(id);}
+  let done=0,fail=0;
+  for(const [cr,L]of grupos)for(let i=0;i<L.length;i+=100){
+    const lote=L.slice(i,i+100);
+    try{
+      await transaccionCR([`tomas/${t.id}`,...lote.map(id=>`tomas/${t.id}/conteos/${id}`)],([tt,...cs])=>{
+        if(!tt||tt._del||tt.estado!=='abierta')throw new Error('La toma ya no está abierta.');
+        const vivos=lote.filter((_,j)=>cs[j]);if(!vivos.length)return {writes:[],value:0};
+        const estados={...tt.crEstados,[cr]:{...tt.crEstados[cr],revision:(tt.crEstados[cr].revision||0)+1}};
+        return {writes:[...vivos.map(id=>[`tomas/${t.id}/conteos/${id}`,{_del:true}]),[`tomas/${t.id}`,{...tt,crEstados:estados,crEditado:cr,loteConteos:{id:uid(),cr,ids:vivos,u:S.me}}]],value:vivos.length};
+      });
+      for(const id of lote)delete colObj(`tomas/${t.id}/conteos`)[id];
+    }catch(e){console.error(e);fail+=lote.length;}
+    done+=lote.length;onProg&&onProg(done,ids.length,fail);
+  }
+  render();return {done,fail};
+}
 // El respaldo se guarda como texto: Firestore indexa cada campo y una toma anual completa supera su límite de índices.
 async function respaldarTomaEliminada(t,C){
   const id='toma-eliminada-'+uid(),datos=JSON.stringify({toma:t,conteos:structuredClone(C)}),nombre=`Respaldo_toma_${fileSafe(t.nombre)}_${today()}.json`;
@@ -1817,7 +1838,7 @@ Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','
     submit:async v=>{ if(String(v.conf||'').trim().toUpperCase()!=='ELIMINAR') return {error:'Escribe ELIMINAR para confirmar, o cancela.'};
       await respaldarTomaEliminada(t,C);
       if(F.length){ const r=await revertirFichas(t,F,(d,n)=>modalProgress(`1/2 · Revirtiendo fichas: ${d} de ${n}…`)); if(r.fail) return {error:`${r.fail} fichas no se pudieron revertir. No se eliminó la toma: vuelve a intentarlo.`}; }
-      const ids=Object.keys(C); const r2=await runMany(ids.map(id=>()=>del(`tomas/${t.id}/conteos`,id)),4,(d,n)=>modalProgress(`2/2 · Borrando conteos: ${d} de ${n}…`));
+      const ids=Object.keys(C); const r2=await borrarConteosToma(t,ids,(d,n)=>modalProgress(`2/2 · Borrando conteos: ${d} de ${n}…`));
       if(r2.fail) return {error:`${r2.fail} conteos no se pudieron borrar. Vuelve a intentarlo.`};
       await del('tomas',t.id); S.tomaSel=null; S.tGroup=''; S.tCR=''; toast(`Toma «${t.nombre}» eliminada${F.length?` y ${F.length} fichas revertidas`:''}.`); render(); } }); },
   tRevertir(){ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; const ids=fichasCierreInterrumpido(t); if(!ids.length) return;
