@@ -499,14 +499,26 @@ let DB=null, USER=null;
 /* ---------- Utilidades ---------- */
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const today = () => new Date().toLocaleDateString('sv-SE');
-const nowIso = () => new Date().toISOString();
+// Fechas de negocio en Lima; las fechas sin hora conservan su día civil.
+const ZONA_FECHAS='America/Lima';
+function instanteFecha(v){
+ if(v instanceof Date)return new Date(v.getTime());
+ if(v&&typeof v==='object'){const sec=v.seconds??v._seconds;if(sec!=null)return new Date(Number(sec)*1000+Number(v.nanoseconds??v._nanoseconds??0)/1e6);}
+ if(typeof v==='string'&&/^\d{4}-\d{2}-\d{2}(?:T| )\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(v))v=v.replace(' ','T')+'-05:00';
+ return new Date(v);
+}
+const partesLima=d=>Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:ZONA_FECHAS,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));
+function fechaLima(v=new Date()){if(/^\d{4}-\d{2}-\d{2}$/.test(String(v)))return String(v);const d=instanteFecha(v);if(isNaN(d))return '';const p=partesLima(d);return `${p.year}-${p.month}-${p.day}`;}
+function isoLima(v=new Date()){const d=instanteFecha(v),p=partesLima(d);return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}.${String(d.getUTCMilliseconds()).padStart(3,'0')}-05:00`;}
+const today = () => fechaLima();
+const nowIso = () => isoLima();
+const ordenFecha = v => Date.parse(v||'')||0;
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id'+Date.now().toString(36)+Math.random().toString(36).slice(2,10));
 const norm = s => String(s??'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim();
-function fmtD(d){ if(!d) return '—'; const s=String(d).slice(0,10); const [y,m,dd]=s.split('-'); if(!dd) return esc(d); return `${dd}/${m}/${y}`; }
-function fmtDT(iso){ if(!iso) return ''; const d=new Date(iso); if(isNaN(d)) return fmtD(iso); return d.toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}); }
-function addMonths(dateStr, n){ const d=new Date(dateStr+'T12:00:00'); d.setMonth(d.getMonth()+Number(n)); return d.toLocaleDateString('sv-SE'); }
-function daysFrom(dateStr){ return Math.round((new Date(dateStr+'T12:00:00') - new Date(today()+'T12:00:00'))/86400000); }
+function fmtD(d){if(!d)return '—';const s=fechaLima(d);if(!s)return esc(d);const [y,m,dd]=s.split('-');return `${dd}/${m}/${y}`;}
+function fmtDT(v){if(!v)return '';if(/^\d{4}-\d{2}-\d{2}$/.test(String(v)))return fmtD(v);const d=instanteFecha(v);if(isNaN(d))return fmtD(v);return d.toLocaleDateString('es-PE',{timeZone:ZONA_FECHAS,day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('es-PE',{timeZone:ZONA_FECHAS,hour:'2-digit',minute:'2-digit'});}
+function addMonths(dateStr,n){const d=new Date(fechaLima(dateStr)+'T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+Number(n));return d.toISOString().slice(0,10);}
+function daysFrom(dateStr){return Math.round((Date.parse(fechaLima(dateStr)+'T12:00:00Z')-Date.parse(today()+'T12:00:00Z'))/86400000);}
 const chip = (txt, cls='') => `<span class="chip ${cls}">${esc(txt)}</span>`;
 const etapaChip = e => chip(ETAPAS[e]?.l || e, ETAPAS[e]?.c || '');
 const condChip = c => c ? chip(c, COND_C[c]??'') : '';
@@ -734,7 +746,7 @@ function vResumen(){
   const malos=act.filter(b=>b.condicion==='Malo'||b.oper==='Inoperativo').length;
   const M=mants(); const venc=M.filter(m=>mEstado(m)==='vencido'); const prox=M.filter(m=>m.estado==='programado' && m.fechaProg>=today() && daysFrom(m.fechaProg)<=30);
   const nPend=B.filter(b=>['requerimiento','aprobado','recibido','baja_solicitada'].includes(b.etapa)).length;
-  const T=tomas(); const abierta=T.filter(t=>t.estado==='abierta').sort((a,b)=>(b.creado||'').localeCompare(a.creado||''))[0];
+  const T=tomas(); const abierta=T.filter(t=>t.estado==='abierta').sort((a,b)=>ordenFecha(b.creado)-ordenFecha(a.creado))[0];
   const tiles=`<div class="tiles">
     <button class="tile" data-act="goBienes" data-f='{"etapa":"activos"}'><b class="num">${act.length.toLocaleString('es-PE')}</b><span>Bienes registrados<br>${af} activos fijos · ${bm} bienes menores</span></button>
     <button class="tile ${sinV?'attn':''}" data-act="goBienes" data-f='{"etapa":"activos","verif":"Sin verificar"}'><b class="num">${sinV.toLocaleString('es-PE')}</b><span>Sin verificación física<br>nunca encontrados en una toma</span></button>
@@ -873,7 +885,7 @@ function igualesActual(){return igualesGrupos(igualesFuente(),true).find(g=>g.ke
 function igualesPanel(key){
  S.igKey=key;const g=igualesActual();if(!g){toast('El grupo ya no está en estos filtros.');return;}
  const M=new Map();for(const b of g.items){const u=ubic(b)||'Sin ubicación',c=b.condicion||'Por evaluar',k=JSON.stringify([u,c]);if(!M.has(k))M.set(k,{u,c,items:[]});M.get(k).items.push(b);}
- const lotes=Object.entries(S.data.config).filter(([id,l])=>id.startsWith('lote-')&&l.tipo==='Actualización de bienes iguales'&&l.prev?.some(x=>g.items.some(b=>b.id===x.id))).sort((a,b)=>String(b[1].fecha).localeCompare(String(a[1].fecha)));
+ const lotes=Object.entries(S.data.config).filter(([id,l])=>id.startsWith('lote-')&&l.tipo==='Actualización de bienes iguales'&&l.prev?.some(x=>g.items.some(b=>b.id===x.id))).sort((a,b)=>ordenFecha(b[1].fecha)-ordenFecha(a[1].fecha));
  const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(key)}</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b" style="display:block"><p>${g.items.length} bienes · ${money(g.h)} histórico · ${money(g.n)} neto</p><div class="row"><button class="btn" data-act="igGrupoCopiar">Copiar para Excel</button><button class="btn primary ro-hide" data-act="igLote">Actualizar en lote</button></div><h3>Ubicación × estado</h3><div class="tbl-wrap"><table><thead><tr><th>Ubicación</th><th>Estado</th><th>Cantidad</th><th>IDs</th></tr></thead><tbody>${[...M.values()].map(x=>`<tr><td>${esc(x.u)}</td><td>${esc(x.c)}</td><td>${x.items.length}</td><td>${esc(igIds(x.items)||'Sin etiqueta')}</td></tr>`).join('')}</tbody></table></div><h3>Fichas individuales</h3><div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Código ADM / contable</th><th>Ubicación</th><th>Estado</th></tr></thead><tbody>${g.items.map(b=>`<tr><td>${esc(b.idEtq??'Sin etiqueta')}</td><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.codigo||b.id)} · ${esc(b.codCont||'')}</button></td><td>${esc(ubic(b))}</td><td>${esc(b.condicion||'Por evaluar')}</td></tr>`).join('')}</tbody></table></div>${lotes.length?`<h3>Lotes de este grupo</h3>${lotes.map(([id,l])=>`<div class="row between"><span>${esc(fmtDT(l.fecha))} · ${l.prev.length} fichas · ${esc(l.estado)}</span><button class="btn ro-hide" data-act="igRevertir" ${l.prev.length>=100?'data-admin':''} data-id="${esc(id)}" ${igualesReversibles(id).length?'':'disabled'}>Revertir lote</button></div>`).join('')}`:''}</div><div class="m-f"><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();aplicarPermisos();
 }
 function igualesLoteModal(){const g=igualesActual();if(!g)return;const key=g.key;
@@ -931,7 +943,7 @@ function vMant(){
 function alcanceTxt(t){ if(t.alcance==='lista')return `Lista de ${(t.esperados||[]).length} bienes`; if(!t.alcance) return 'Todos los bienes'; const [k,...v]=t.alcance.split(':'); return ({area:'Área',sede:'Sede',grupo:'Grupo'}[k]||'')+': '+v.join(':'); }
 function vInv(){
   if(S.tomaSel && S.data.tomas[S.tomaSel]) return vToma(S.tomaSel);
-  const T=tomas().sort((a,b)=>(a.estado==='abierta'?0:1)-(b.estado==='abierta'?0:1) || (b.creado||'').localeCompare(a.creado||''));
+  const T=tomas().sort((a,b)=>(a.estado==='abierta'?0:1)-(b.estado==='abierta'?0:1) || ordenFecha(b.creado)-ordenFecha(a.creado));
   return `<div class="row between"><h2>Toma de inventario</h2><div class="row ro-hide"><details class="menu right" data-admin><summary class="btn">Preparar datos <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu"><button class="mi" role="menuitem" data-act="tCargarV3">Cargar etiquetas V3</button><button class="mi" role="menuitem" data-act="tActivo">Revisar descripciones</button><button class="mi" role="menuitem" data-act="tFormato71">Enriquecer con Formato 7.1</button></div></details><button class="btn primary" data-act="tNueva">Nueva toma de inventario</button></div></div>
   <p class="muted" style="margin:0;max-width:75ch">Verifica en campo que cada bien exista, dónde está, quién lo usa y en qué estado. Fija el ambiente donde estás, registra los IDs de etiqueta por rangos o escribe a mano el ID o código, y anota solo las diferencias. Al cerrar la toma se actualizan las fichas y se marcan los no localizados.</p>
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Toma</th><th>Alcance</th><th>Avance</th><th>Por conciliar</th><th>No localizados</th><th>Sobrantes</th><th>Estado</th></tr></thead><tbody>${T.map(t=>{ const p=tomaProg(t); return `<tr class="click" data-act="openToma" data-id="${esc(t.id)}" tabindex="0"><td class="w"><div class="nm">${esc(t.nombre)}</div><div class="small muted">Iniciada ${fmtD(t.creado)}${t.cierre?` · cerrada ${fmtD(t.cierre)}`:''}</div></td><td class="w" data-l="Alcance">${esc(alcanceTxt(t))}</td><td class="grow" style="min-width:140px" data-l="Avance"><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div><div class="small muted num">${p.ver??p.ok} de ${p.tot}</div></td><td class="num" data-l="Por conciliar">${p.conc}</td><td class="num" data-l="No localiz.">${p.nol}</td><td class="num" data-l="Sobrantes">${(t.sobrantes||[]).length}</td><td>${t.estado==='abierta'?chip('En curso','c-warn'):chip('Cerrada','c-ok')}</td></tr>`; }).join('') || `<tr><td colspan="7" class="empty">Aún no hay tomas de inventario.</td></tr>`}</tbody></table></div></div>`;
@@ -1129,7 +1141,7 @@ const ACT = {
       if(m.tipo==='Preventivo' && m.per>0){ const nid=uid(); const fp=addMonths(v.fechaReal,m.per); await put('mantenimientos',nid,{bienId:m.bienId,tipo:'Preventivo',fechaProg:fp,descripcion:m.descripcion,tecnico:v.tecnico||m.tecnico,per:m.per,estado:'programado',creado:nowIso(),u:S.me||null,...(m.ejemplo?{ejemplo:true}:{})}); toast(`Completado. Próximo preventivo: ${fmtD(fp)}.`); } else toast('Mantenimiento completado.'); } }); },
 
   /* inventario */
-  tNueva(){ const now=new Date(); const mes=now.toLocaleDateString('es-PE',{month:'long',year:'numeric'});
+  tNueva(){ const now=new Date(); const mes=now.toLocaleDateString('es-PE',{timeZone:ZONA_FECHAS,month:'long',year:'numeric'});
     const opts=[['','Todos los bienes en uso'], ...distinct('area').map(u=>['area:'+u,'Área: '+u]), ...distinct('sede').map(u=>['sede:'+u,'Sede: '+u]), ...distinct('categoria').map(u=>['grupo:'+u,'Grupo: '+u])];
     openForm({title:'Nueva toma de inventario', fields:[{k:'alcance',l:'Qué bienes se van a verificar',t:'select',opts,full:true,help:'Al inicio, cuando aún no se conocen las ubicaciones, conviene ir por área (CR).'}, {k:'nombre',l:'Nombre',full:true,ph:`Toma física ${mes}`}],
       submit:async v=>{ const [k,...rest]=(v.alcance||'').split(':'); const val=rest.join(':'); const fld={area:'area',sede:'sede',grupo:'categoria'}[k];
@@ -1159,8 +1171,8 @@ const ACT = {
     const clean=x=>String(x??'').replace(/[\t\r\n]+/g,' ');
     const ids=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!(t.esperados||[]).includes(k))];
     const lines=[head.join('\t'), ...ids.map(bid=>{ const b=S.data.bienes[bid]||{}; const c=C[bid]; const r=c?.r || (open?'Pendiente':'No localizado');
-      return [b.codigo,b.categoria,b.codCont?`${b.codCont} — ${b.nombre}`:b.nombre,b.marca,b.modelo,b.serie,b.crs||b.area,r,c&&c.r!=='No localizado'?(c.cant??1):'',c?.sede,c?.piso,(c?.ambiente||'')+(cuadDe(c)?` (${cuadDe(c)})`:''),c?.cu,c?.c,c?.o,c?.ev,c?.obs,c?.t?new Date(c.t).toLocaleDateString('es-PE'):'',c?nameOf(c.u):''].map(clean).join('\t'); }),
-      ...(t.sobrantes||[]).map(s=>['','','SOBRANTE — '+s.d,s.marca,s.modelo,s.serie,'','Sobrante',s.cant||1,'','',s.ub,'',s.c,s.o,'',s.nota,s.t?new Date(s.t).toLocaleDateString('es-PE'):'',nameOf(s.u)].map(clean).join('\t'))];
+      return [b.codigo,b.categoria,b.codCont?`${b.codCont} — ${b.nombre}`:b.nombre,b.marca,b.modelo,b.serie,b.crs||b.area,r,c&&c.r!=='No localizado'?(c.cant??1):'',c?.sede,c?.piso,(c?.ambiente||'')+(cuadDe(c)?` (${cuadDe(c)})`:''),c?.cu,c?.c,c?.o,c?.ev,c?.obs,c?.t?ddmmyyyy(c.t):'',c?nameOf(c.u):''].map(clean).join('\t'); }),
+      ...(t.sobrantes||[]).map(s=>['','','SOBRANTE — '+s.d,s.marca,s.modelo,s.serie,'','Sobrante',s.cant||1,'','',s.ub,'',s.c,s.o,'',s.nota,s.t?ddmmyyyy(s.t):'',nameOf(s.u)].map(clean).join('\t'))];
     copyText(lines.join('\n'),`${ids.length} filas copiadas. Pégalas en la hoja «Toma física» o en un Excel nuevo.`); },
 
   /* importación */
@@ -2049,7 +2061,7 @@ async function guardarArchivo(filename,blob){
   toast('Esta vista no permite descargar archivos. Abre la app desde claude.ai.'); return false; }
 const edifCorto=s=>{ const p=String(s||'').split(' · ')[1]; return p?zonaCorta(p):''; };
 const fileSafe=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'_').slice(0,60)||'toma';
-const ddmmyyyy=d=>{ if(!d) return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(String(d)))return String(d).slice(8,10)+'/'+String(d).slice(5,7)+'/'+String(d).slice(0,4); const x=new Date(d); if(isNaN(x)) return String(d); return x.toLocaleDateString('es-PE',{timeZone:'America/Lima',day:'2-digit',month:'2-digit',year:'numeric'}); };
+const ddmmyyyy=d=>d?fmtD(d):'';
 const ENT='SOCIEDAD BÍBLICA PERUANA';
 
 /* ---------- Plantilla de toma (para el levantamiento en papel o la transcripción) ---------- */
@@ -2095,9 +2107,9 @@ const nrm=s=>String(s??'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()
 const IMPT={cod:['codigo — descripcion','codigo - descripcion','codigo y descripcion','codigo / descripcion','codigo contable','codigo del activo','codigo'],adm:['codigo adm'],fecha:['fecha de inventario','fecha'],edif:['edificio','sede'],piso:['piso','nivel'],zona:['zona (cuadrante)','zona','cuadrante'],ubic:['ubicacion / ambiente','ubicacion fisica','ubicacion','ambiente'],cant:['cantidad','cant'],estado:['estado','conservacion'],oper:['operatividad'],cu:['custodio / usuario','custodio','usuario','responsable'],obs:['observaciones','observacion','comentarios','notas','nota'],grupo:['grupo'],desc:['descripcion','denominacion','bien'],marca:['marca'],modelo:['modelo'],serie:['serie / placa','serie','placa']};
 function mapHdr(row){ const m={}; const H=(row||[]).map(nrm); for(const [k,syn] of Object.entries(IMPT)){ for(const s of syn){ const i=H.findIndex((h,j)=>h&&(h===s||h.startsWith(s+' ')||h.startsWith(s+'('))&&!Object.values(m).includes(j)); if(i>=0){ m[k]=i; break; } } } return m; }
 const esHdr=m=>(m.fecha!=null||m.cant!=null)&&['fecha','edif','piso','ubic','cant','estado'].filter(k=>m[k]!=null).length>=3;
-function fechaIso(v){ if(v==null||v==='') return null; let d=null; if(typeof v==='number'&&v>20000&&v<80000){ d=new Date(Date.UTC(1899,11,30)+Math.round(v)*864e5); }
+function fechaIso(v){ if(v==null||v==='') return null; if(v instanceof Date||v&&typeof v==='object'||typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(v)){const f=instanteFecha(v);return isNaN(f)?null:isoLima(f);} let d=null; if(typeof v==='number'&&v>20000&&v<80000){ d=new Date(Date.UTC(1899,11,30)+Math.round(v)*864e5); }
   else { const s=String(v).trim(); let m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if(m){ let y=+m[3]; if(y<100) y+=2000; d=new Date(Date.UTC(y,+m[2]-1,+m[1])); } else if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})/))) d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); }
-  if(!d||isNaN(d)) return null; d.setUTCHours(17); return d.toISOString(); }
+  if(!d||isNaN(d)) return null; d.setUTCHours(17); return isoLima(d); }
 function pisoKey(s){ let x=nrm(s).replace(/°|º|\./g,'').replace(/\bpiso\b|\bnivel\b/g,'').trim(); const W={primer:'1',primero:'1',segundo:'2',tercer:'3',tercero:'3',cuarto:'4',quinto:'5',sexto:'6'}; if(W[x]) return W[x];
   x=x.replace(/^sotano\s*/,'s').replace(/^sot\s*/,'s').replace(/^semisotano$/,'sm').replace(/^semi\s*sotano$/,'sm').replace(/^azotea$|^techo$/,'az').replace(/(\d+)\s*(er|ro|do|to|vo|no)$/,'$1').replace(/\s+/g,''); return x; }
 function planoDePiso(s){ if(!s) return null; const k=pisoKey(s); const P=planos().filter(p=>p.marco); return P.find(p=>pisoKey(p.piso)===k)||P.find(p=>nrm(planoNombre(p))===nrm(s))||P.find(p=>pisoKey(p.nombre||'')===k)||null; }
@@ -2275,7 +2287,7 @@ function fechaNormalizada(v){
  }
  const s=String(v),dateOnly=/^\d{4}-\d{2}-\d{2}$/.test(s);
  if(dateOnly){const ms=Date.parse(s+'T00:00:00Z');return Number.isFinite(ms)?{v:(ms-Date.UTC(1899,11,30))/864e5,s:'fecha'}:s;}
- const d=new Date(s);if(isNaN(d))return s;
+ const d=instanteFecha(s);if(isNaN(d))return s;
  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));
  return {v:(Date.UTC(+parts.year,+parts.month-1,+parts.day,+parts.hour,+parts.minute,+parts.second)-Date.UTC(1899,11,30))/864e5,s:'fechaHora'};
 }
@@ -2443,7 +2455,7 @@ function detectSheet(sheets){
 }
 function numv(v){ if(v==null||v==='') return null; const n=typeof v==='number'?v:Number(String(v).replace(/[^\d.,-]/g,'').replace(/,(?=\d{3}\b)/g,'').replace(',','.')); return isFinite(n)?Math.round(n*100)/100:null; }
 const money=v=>v==null||v===''?'':'S/ '+Number(v).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
-function xlDate(v){ if(typeof v==='number' && v>20000 && v<80000){ const d=new Date(Date.UTC(1899,11,30)+v*86400000); return d.toISOString().slice(0,10); } return v?String(v).slice(0,10):''; }
+function xlDate(v){ if(typeof v==='number' && v>20000 && v<80000){ const d=new Date(Date.UTC(1899,11,30)+v*86400000); return d.toISOString().slice(0,10); } return v?(/^\d{4}-\d{2}-\d{2}T/.test(String(v))?fechaLima(v):String(v).slice(0,10)):''; }
 function mapRows(best){
   const m=best.map; const out=[]; const seen=new Set();
   const g=(r,k)=>{ const i=m[k]; if(i==null) return ''; const v=r[i]; return v==null?'':String(v).trim(); };
@@ -2611,7 +2623,7 @@ async function resolveNames(){
 
 /* ---------- Datos de ejemplo (solo para la vista de prueba sin conexión) ---------- */
 function makeSeed(T){
-  const d=(n)=>{ const x=new Date(T+'T12:00:00'); x.setDate(x.getDate()+n); return x.toLocaleDateString('sv-SE'); };
+  const d=(n)=>{ const x=new Date(T+'T12:00:00Z'); x.setUTCDate(x.getUTCDate()+n); return x.toISOString().slice(0,10); };
   const ts=(n,h)=>d(n)+'T'+(h||'15')+':00:00.000Z';
   const E=(n,tipo,det)=>({t:ts(n),tipo,det,u:null});
   const mk=(o)=>{ const b={ejemplo:true,etapa:'en_uso',tipo:'AF',oper:'Operativo',creado:o.hist[0].t,act:o.hist[o.hist.length-1].t,...o}; b.ubicacion=ubic(b); return b; };
@@ -2842,14 +2854,14 @@ async function comenzarCierreCR(tid,cr,huella,avisados=[],fichasRevisadas=null){
  return transaccionCR([`tomas/${tid}`],([actual])=>{
   exigirAdmin();if(!actual||actual.estado!=='abierta'||estadoCR(actual,cr)!=='abierta'||firmaDatos(actual.crEstados[cr])!==firmaDatos(t.crEstados[cr])||firmaDatos(actual.crPorBien)!==firmaDatos(t.crPorBien)||firmaDatos(actual.sobrantes)!==firmaDatos(t.sobrantes))throw new Error('El CR cambió o ya se está cerrando. Revisa el resumen.');
   const anterior=actual.crEstados[cr],version=(anterior.version||0)+1,info={...anterior,estado:'cerrando',op,versionEnCurso:version,inicio:f};
-  const acta={estado:'proceso',cr,version,fecha:f,fechaArchivo:fecha,tomaId:tid,tomaNombre:actual.nombre,crNombre:nombreCR(cr),por:S.me,nombreAdministrador:who(S.me),ids,fichasRevisadas:revision.firmas,meta:structuredClone(S.data.config.formato71||{razon:'Sociedad Bíblica Peruana',ruc:'20125899723',periodo:String(new Date().getFullYear())}),sobrantes:structuredClone((actual.sobrantes||[]).filter(s=>s.cr===cr).map(s=>({...s,inventariador:nameOf(s.u)}))),anterior};
+  const acta={estado:'proceso',cr,version,fecha:f,fechaArchivo:fecha,tomaId:tid,tomaNombre:actual.nombre,crNombre:nombreCR(cr),por:S.me,nombreAdministrador:who(S.me),ids,fichasRevisadas:revision.firmas,meta:structuredClone(S.data.config.formato71||{razon:'Sociedad Bíblica Peruana',ruc:'20125899723',periodo:String(today().slice(0,4))}),sobrantes:structuredClone((actual.sobrantes||[]).filter(s=>s.cr===cr).map(s=>({...s,inventariador:nameOf(s.u)}))),anterior};
   return {writes:[[`tomas/${tid}`,{...actual,cierresEnCurso:(actual.cierresEnCurso||0)+1,crEstados:{...actual.crEstados,[cr]:info}}],[`tomas/${tid}/actasCR/${op}`,acta]],value:op};
  });
 }
 function camposFichaCR(b){return Object.fromEntries(CAMPOS_CIERRE.map(k=>[k,b[k]??null]));}
 function fichaCierreCR(t,cr,op,b,c,fecha){
  const r=c?.r||'No localizado';if(!['Encontrado','No localizado'].includes(r))throw new Error('El CR tiene bienes por conciliar.');
- const inv={f:fecha.slice(0,10),toma:t.nombre,tomaId:t.id,cr,cierreCR:op,r};
+ const inv={f:fechaLima(fecha),toma:t.nombre,tomaId:t.id,cr,cierreCR:op,r};
  const fields=r==='No localizado'?{inv}:{amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion||'',oper:c.o||b.oper||'',inv};
  const evento={t:fecha,tipo:r==='Encontrado'?'Verificado en inventario':'No localizado en inventario',det:`${t.nombre} · CR ${cr}${c?.obs?' · '+c.obs:''}`,u:S.me,toma:t.id,cr,cierreCR:op,prev:camposFichaCR(b)};
  return {...b,...fields,hist:[...(b.hist||[]),evento],act:fecha};
@@ -2941,7 +2953,7 @@ function hojasActaCR(a,F){
 }
 async function descargarActaCR(tid,op){
  const base=`tomas/${tid}/actasCR/${op}`,a=await leerCR(base),F=await coleccionCR(`${base}/filas`);if(!a)throw new Error('Acta no disponible.');
- const blob=await xlsxBlob(hojasActaCR(a,F));await guardarArchivo(`Acta_${fileSafe(a.tomaNombre)}_CR${a.cr}_${a.fechaArchivo}_v${a.version}.xlsx`,blob);
+ const blob=await xlsxBlob(hojasActaCR(a,F));await guardarArchivo(`Acta_${fileSafe(a.tomaNombre)}_CR${a.cr}_${fechaLima(a.fecha)||a.fechaArchivo}_v${a.version}.xlsx`,blob);
 }
 async function editarSobrantesCR(tid,fn){
  return transaccionCR([`tomas/${tid}`],([t])=>{
@@ -2993,8 +3005,8 @@ Object.assign(ACT,{
  tEliminar(){const t=S.data.tomas[S.tomaSel];if(esAnual(t)&&Object.values(t.crEstados).some(s=>s.estado!=='abierta'||s.actas?.length))return toast('Esta toma tiene cierres por CR. Revisa sus actas; no se elimina mediante «Eliminar toma».');return ACTprevAnual.tEliminar();},
  openToma(id){S.anCR=null;S.anAvanceOpen=false;const r=ACTprevAnual.openToma(id);if(esAnual(S.data.tomas[id]))S.tGroup='';return r;},
  tNueva(){
-  exigirAdmin();const mes=new Date().toLocaleDateString('es-PE',{month:'long',year:'numeric'}),opts=[['','Todos los bienes en uso'],['lista','Lista de IDs o códigos ADM'],...distinct('area').map(x=>['area:'+x,'Área: '+x]),...distinct('sede').map(x=>['sede:'+x,'Sede: '+x]),...distinct('categoria').map(x=>['grupo:'+x,'Grupo: '+x])];
-  openForm({title:'Nueva toma de inventario',note:'<p><b>Toma anual (con cierres por CR)</b><br>Inventaría los bienes del año y genera un acta al cerrar cada CR, mientras los demás siguen abiertos.</p><p><b>Toma puntual (un área o lista de bienes)</b><br>Verifica un conjunto concreto y ciérralo en una sola operación.</p>',fields:[{k:'tipo',l:'Tipo de toma',t:'select',opts:[['anual','Toma anual (con cierres por CR)'],['puntual','Toma puntual (un área o lista de bienes)']],full:true,req:true},{k:'nombre',l:'Nombre',v:`Inventario ${new Date().getFullYear()}`,full:true,req:true},{k:'alcance',l:'Alcance',t:'select',opts,full:true},{k:'lista',l:'Lista de bienes (solo si eliges ese alcance)',full:true,ph:'10-29, 35, MUEBLES-0196',help:'Separa IDs, rangos o códigos ADM con comas.'}],ok:'Revisar bienes',submit:async v=>{
+  exigirAdmin();const mes=new Date().toLocaleDateString('es-PE',{timeZone:ZONA_FECHAS,month:'long',year:'numeric'}),opts=[['','Todos los bienes en uso'],['lista','Lista de IDs o códigos ADM'],...distinct('area').map(x=>['area:'+x,'Área: '+x]),...distinct('sede').map(x=>['sede:'+x,'Sede: '+x]),...distinct('categoria').map(x=>['grupo:'+x,'Grupo: '+x])];
+  openForm({title:'Nueva toma de inventario',note:'<p><b>Toma anual (con cierres por CR)</b><br>Inventaría los bienes del año y genera un acta al cerrar cada CR, mientras los demás siguen abiertos.</p><p><b>Toma puntual (un área o lista de bienes)</b><br>Verifica un conjunto concreto y ciérralo en una sola operación.</p>',fields:[{k:'tipo',l:'Tipo de toma',t:'select',opts:[['anual','Toma anual (con cierres por CR)'],['puntual','Toma puntual (un área o lista de bienes)']],full:true,req:true},{k:'nombre',l:'Nombre',v:`Inventario ${today().slice(0,4)}`,full:true,req:true},{k:'alcance',l:'Alcance',t:'select',opts,full:true},{k:'lista',l:'Lista de bienes (solo si eliges ese alcance)',full:true,ph:'10-29, 35, MUEBLES-0196',help:'Separa IDs, rangos o códigos ADM con comas.'}],ok:'Revisar bienes',submit:async v=>{
    const [k,...rest]=(v.alcance||'').split(':'),fld={area:'area',sede:'sede',grupo:'categoria'}[k],val=rest.join(':'),ids=bienes().filter(b=>ACTIVOS.includes(b.etapa)&&(!fld||(b[fld]||'')===val)).map(b=>b.id);if(v.alcance==='lista'){if(!v.lista)return {error:'Indica los IDs o códigos ADM de la lista.'};const elegidos=new Set();for(const parte of v.lista.split(',').map(x=>x.trim()).filter(Boolean)){const bien=bienes().find(b=>(b.codigo||b.id)===parte);if(bien)elegidos.add(bien.id);else{let r;try{r=analizarRangos(parte);}catch(e){return {error:e.message};}if(r.inexistentes.length||!r.bienes.length)return {error:'Hay IDs o códigos desconocidos en la lista: '+parte};r.bienes.forEach(b=>elegidos.add(b.id));}}const activos=new Set(ids);if([...elegidos].some(id=>!activos.has(id)))return {error:'La lista incluye bienes que no están en uso.'};ids.splice(0,ids.length,...elegidos);}if(!ids.length)return {error:'No hay bienes con ese alcance.'};
    const coincidencias=await coincidenciasTomas(ids),firma=firmaDatos(coincidencias);
    openForm({title:coincidencias.length?'Hay bienes en otra toma abierta':v.tipo==='anual'?'Confirmar nueva toma anual':'Confirmar toma puntual',note:`<b>${ids.length}</b> bienes.<ul>${coincidencias.map(x=>`<li><b>${esc(x.nombre)}</b>: ${x.ids.length} bienes compartidos. IDs ${esc(rangoIds(x.ids.map(id=>S.data.bienes[id]?.idEtq).filter(Number.isFinite))||'sin etiqueta')}. CR: ${esc([...new Set(x.ids.map(id=>S.data.bienes[id]?crActual(S.data.bienes[id]):SIN_CR))].join(', '))}.</li>`).join('')}</ul>${coincidencias.length?'<p class="err">Cada toma conserva sus propios conteos. Cerrar el mismo bien en distintas tomas puede actualizar su ficha con resultados diferentes. Continúa solo si has coordinado ese trabajo.</p>':''}`,fields:[{k:'conf',l:coincidencias.length?'Escribe CREAR OTRA TOMA para continuar como administrador':'Escribe CREAR',req:true,full:true}],ok:v.tipo==='anual'?'Crear toma anual':'Crear toma puntual',submit:async w=>{
