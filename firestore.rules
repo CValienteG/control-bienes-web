@@ -18,12 +18,25 @@ service cloud.firestore {
         && t.esperados is list && t.crPorBien.keys().hasAll(t.esperados)
         && t.crPorBien.keys().hasOnly(t.esperados);
     }
+    function loteConteosValido(a, b) {
+      let lote = b.get('loteConteos', {});
+      return lote is map && lote.keys().hasAll(['id', 'cr', 'ids', 'u'])
+        && lote.keys().hasOnly(['id', 'cr', 'ids', 'u'])
+        && lote.id is string && lote.id.size() > 0
+        && lote.id != a.get('loteConteos', {}).get('id', '')
+        && lote.cr == b.get('crEditado', '') && lote.cr != 'SIN_CR'
+        && lote.u == request.auth.uid && lote.ids is list
+        && lote.ids.size() > 0 && lote.ids.size() <= 100
+        && lote.ids.toSet().size() == lote.ids.size()
+        && a.esperados.hasAll(lote.ids);
+    }
     function revisionUsuario(a, b) {
       let cambios = b.crEstados.diff(a.crEstados).affectedKeys();
       let cr = b.get('crEditado', '');
       return cambios.size() == 1 && cambios.hasOnly([cr]) && abierto(a, cr) && cr != 'SIN_CR'
         && b.crEstados[cr].diff(a.crEstados[cr]).affectedKeys().hasOnly(['revision'])
-        && revision(b, cr) == revision(a, cr) + 1;
+        && revision(b, cr) == revision(a, cr) + 1
+        && (b.get('loteConteos', {}) == a.get('loteConteos', {}) || loteConteosValido(a, b));
     }
     function sobranteAbierto(t, lista) {
       return lista.size() == 0 || (lista.size() == 1 && abierto(t, lista[0].get('cr', 'SIN_CR')));
@@ -56,7 +69,7 @@ service cloud.firestore {
       return viva(a) && viva(b) && (
         (!anual(a) && cambios.hasOnly(['sobrantes', '_m'])) ||
         (anual(a) && anual(b) && (
-          (cambios.hasOnly(['crEstados', 'crEditado', '_m']) && revisionUsuario(a, b)) ||
+          (cambios.hasOnly(['crEstados', 'crEditado', 'loteConteos', '_m']) && revisionUsuario(a, b)) ||
           (cambios.hasOnly(['sobrantes', '_m']) && sobrantesEditables(a, b))
         ))
       );
@@ -79,6 +92,11 @@ service cloud.firestore {
         cr != 'SIN_CR' && bid in t.crPorBien && abierto(t, cr)
         && despues.crPorBien == t.crPorBien && abierto(despues, cr)
         && revision(despues, cr) == revision(t, cr) + 1
+        && despues.get('crEditado', '') == cr
+        && (despues.get('loteConteos', {}) == t.get('loteConteos', {}) || (
+          loteConteosValido(t, despues) && despues.loteConteos.cr == cr
+          && bid in despues.loteConteos.ids
+        ))
       ));
     }
     function vivoConteo(t) { return viva(t); }
