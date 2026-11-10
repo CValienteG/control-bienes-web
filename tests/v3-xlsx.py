@@ -25,8 +25,11 @@ for tipo in ('anual', 'puntual'):
             assert all(c.fill.fgColor.rgb == 'FFFFF8DC' for c in row[8:])
         assert ws['I2'].number_format == 'dd/mm/yyyy'
         validations = ws.data_validations.dataValidation
-        assert len(validations) == 6
-        assert {str(d.sqref).split(':')[0] for d in validations} == {'J2', 'K2', 'L2', 'M2', 'N2', 'O2'}
+        # Edificio, piso y ubicación son texto libre: solo hay listas en operatividad y conservación.
+        assert len(validations) == 3
+        assert {str(d.sqref).split(':')[0] for d in validations} == {'M2', 'N2', 'O2'}
+        assert set(wb.defined_names.keys()) >= {'V3Operatividad', 'V3Conservacion'}
+        assert not {'V3Edificios', 'V3Pisos', 'V3Ambientes'} & set(wb.defined_names.keys())
         for dv in validations:
             if dv.type == 'list':
                 name = wb.defined_names[dv.formula1]
@@ -38,4 +41,4 @@ for tipo in ('anual', 'puntual'):
         assert wb['Listas'].sheet_state == 'hidden'
         assert 'Léeme' in wb.sheetnames
         assert all(c.data_type != 'f' for row in ws for c in row)
-        print('OK XLSX:', tipo, alcance, 'fila 1, 17 columnas, bloques, listas, filtros, fecha e IDs fijos')
+        print('OK XLSX:', tipo, alcance, 'fila 1, 17 columnas, bloques, ubicación libre, dos listas, filtros, fecha e IDs fijos')

@@ -1,6 +1,6 @@
 # Hoja de la toma V3 y vista previa de importación
 
-La descarga comienza en la fila 1. Las columnas A–H son de consulta, en gris; I–Q son para llenar, en amarillo suave. Se mantiene una fila por bien e ID fijo. La hoja «Léeme» explica los colores y el conteo. Las listas de edificio, piso, ambiente, operatividad y conservación usan rangos con nombre en una hoja oculta, para evitar el límite de 255 caracteres de las listas escritas directamente en una celda.
+La descarga comienza en la fila 1. Las columnas A–H son de consulta, en gris; I–Q son para llenar, en amarillo suave. Se mantiene una fila por bien e ID fijo. La hoja «Léeme» explica los colores y el conteo. EDIFICIO, PISO y UBICACIÓN son texto libre, sin listas desplegables: los nombres oficiales de los ambientes se asignan durante el inventario y luego se vinculan al plano en la importación. Solo OPERATIVIDAD y CONSERVACIÓN tienen listas, porque son valores fijos de la app; usan rangos con nombre en una hoja oculta.
 
 La vista previa reconoce títulos en cualquier orden y fila, incluida ESTADO como alias de OPERATIVIDAD. La conservación registrada en las V3 anteriores se conserva cuando contiene Bueno, Regular, Malo o Por evaluar. La nueva descarga contiene una sola columna OPERATIVIDAD, separada de CONSERVACIÓN.
 
@@ -14,7 +14,7 @@ Todas las escrituras de prueba se hicieron con datos de ejemplo en modo local o 
 
 | Pantalla o formato | Qué se comprobó |
 | --- | --- |
-| Descargar V3 | Anual y puntual, por CR y todos los CR: 17 columnas desde fila 1; solo consulta en gris; bloque a llenar amarillo, incluido el encabezado; fechas, filtros, inmovilización, seis validaciones (cinco listas y cantidad), rangos con nombre, hoja Léeme e IDs sin fórmulas. |
+| Descargar V3 | Anual y puntual, por CR y todos los CR: 17 columnas desde fila 1; solo consulta en gris; bloque a llenar amarillo, incluido el encabezado; fechas, filtros, inmovilización, tres validaciones (operatividad, conservación y cantidad; edificio, piso y ubicación libres), rangos con nombre, hoja Léeme e IDs sin fórmulas. |
 | V3 de la versión anterior | Se capturó una descarga con 151 bienes de ejemplo del código público de `main` `c6de2b8`: 18 columnas, encabezado en fila 14. El importador nuevo reconoce todos los bienes y mantiene las filas vacías pendientes. Se probó también una descarga anterior con conteos: conserva fecha, custodio, conservación, operatividad, observaciones y los tres resultados. |
 | V3 original de 13 columnas | Se leyó `01-LISTA_ACTIVO_FIJO_082026-V3.xlsx`: 1305 bienes, sin desconocidos ni errores. Esta es una comprobación adicional; no sustituye al archivo `03-IMPORTACION…` solicitado. |
 | Vista previa | 151 encontrados; botón con número de conteos; sin escribir IMPORTAR; columnas ignoradas bajo el resumen; ubicaciones pendientes primero y resueltas plegadas; búsqueda limitada por edificio y piso; sugerencias seguras y ambiguas; asignaciones, custodio, búsqueda y reemplazo conservados al cambiar otros campos. Anchuras 1366, 768 y 360 px, sin desbordamiento del diálogo; tabla con desplazamiento horizontal en móvil. |
@@ -25,13 +25,13 @@ Todas las escrituras de prueba se hicieron con datos de ejemplo en modo local o 
 | Firestore oficial | SDK real contra emulador: 151 conteos anuales en dos lotes por CR, un conteo puntual, responsables y ubicaciones guardados con las reglas actuales. |
 | V3 real de todos los CR (versión publicada) | Archivo del usuario `V3_Toma_INVENTARIO_ACTIVO_FIJO_-_ANO_2026_Todos_CR.xlsx`: 1307 bienes, 34 CR, cabecera en fila 14 y 18 columnas; 479 conteos de CR 20312, 828 pendientes, sin errores ni columnas ignoradas. Con planos aproximados, 12 de 14 ubicaciones se resuelven solas; quedan Comedor (Almacenes, piso 6) y Almacén - Piso 01 (Almacenes, piso 4). Con los 479 conteos ya registrados, el botón queda en «Importar 0 conteos» y ofrece reemplazo explícito. |
 | Códigos contables en la toma | En la versión publicada, cada fila se comparaba con su propio bien: el archivo real mostraba 1305 avisos «ya existe en 1 bien de la base». Ahora solo se avisa si el código está en otro bien o se repite en el archivo: quedan los 2 casos reales (M-000954-D y M-000977-A). Prueba `tests/v3-codigos.cjs`. |
-| LibreOffice | La plantilla nueva con los 798 bienes de CR 20312 se abrió y guardó en LibreOffice: conserva inmovilización, seis validaciones, rangos con nombre y hoja oculta; reimporta 479 conteos y 319 pendientes sin errores. No sustituye la prueba en Excel. |
+| LibreOffice | La plantilla nueva con los 798 bienes de CR 20312 se abrió y guardó en LibreOffice: conserva inmovilización, validaciones, rangos con nombre y hoja oculta; reimporta 479 conteos y 319 pendientes sin errores. No sustituye la prueba en Excel. |
 | Regresión | Resumen y fichas con códigos compartidos; corrección contable con motivo e historial; etiqueta/ADM inmutables; marcar y desmarcar duplicados; alta Excel/CSV, Formato 7.1, toma anual y puntual, cierres, Hallazgos y actas congeladas. |
 
 ## Pendiente antes de integrar y publicar
 
 - Importar el archivo exacto `03-IMPORTACION_ACTIVO_FIJO-CR_20312-082026-V1.xlsx`, si aún se usará. No está en Descargas, Documentos ni Drive. Se probó en su lugar la V3 real de todos los CR.
-- Abrir una descarga nueva en **Microsoft Excel de escritorio**, comprobar que no solicita reparación, probar las cinco listas, filtros, inmovilización y guardado; volver a importar esa copia guardada desde Excel. El entorno disponible es Linux y no hay una sesión de Excel conectada. Las verificaciones con openpyxl no sustituyen esta prueba.
+- Abrir una descarga nueva en **Microsoft Excel de escritorio**, comprobar que no solicita reparación, probar las listas, filtros, inmovilización y guardado; volver a importar esa copia guardada desde Excel. **Hecho el 10-nov por el usuario** con la versión anterior a quitar las listas de ubicación: el archivo guardado por Excel conserva tabla, filtro, inmovilización, validaciones, rangos y hoja oculta, y se reimporta sin errores. El entorno disponible es Linux y no hay una sesión de Excel conectada. Las verificaciones con openpyxl no sustituyen esta prueba.
 
 No se modificó `firestore.rules` ni se publicaron reglas. No se modificaron datos reales. La integración en `main` y la publicación quedan pendientes de las dos comprobaciones anteriores. Verificar el SHA de `main` y la ejecución de Pages antes de comunicar que está publicado.
 
