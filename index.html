@@ -675,7 +675,41 @@ async function guardarConteoUI(tid,bid,d,options){
   try{return await put(`tomas/${tid}/conteos`,bid,d,options);}
   catch(e){if(e.code==='conteo-conflict'){mostrarConflicto(e);return null;}throw e;}
 }
+// Hasta 100 conteos del mismo CR y una revisión, confirmados juntos.
+async function guardarLoteConteosCR(tid,cr,items){
+ exigirEscritura();if(!items.length||items.length>100||new Set(items.map(x=>x.id)).size!==items.length)throw new Error('El lote debe contener de 1 a 100 bienes distintos.');
+ const loteId=uid(),nuevos=items.map(x=>({...structuredClone(x.d),u:S.me||null,_rev:uid()}));
+ return transaccionCR([`tomas/${tid}`,...items.map(x=>`tomas/${tid}/conteos/${x.id}`)],([t,...raws])=>{
+  exigirEscritura();if(!t||t._del||t.estado!=='abierta'||!esAnual(t))throw new Error('La toma anual ya no está abierta.');
+  const conflictos=[],writes=[],guardados=[];
+  items.forEach((x,i)=>{
+   validarRegistroCR(t,x.id);if(crFijo(t,x.id)!==cr)throw new Error('Cambió la pertenencia del CR. Revisa el lote antes de importar.');
+   const actual=limpioConteo(raws[i]);
+   if(versionConteo(actual)!==versionConteo(x.anterior||null)){
+    conflictos.push(Object.assign(new Error(`Ya registrado por ${actual?who(actual.u):'otra persona'} en ${actual?ubic(actual)||'sin ubicación':'un registro que cambió'}.`),{code:'conteo-conflict',tid,bid:x.id,actual,propuesto:nuevos[i]}));return;
+   }
+   const d={...nuevos[i],...(actual?{prev:actual}:{})};guardados.push(x.id);writes.push([`tomas/${tid}/conteos/${x.id}`,d]);
+  });
+  if(guardados.length){const estados={...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}};writes.push([`tomas/${tid}`,{...t,crEstados:estados,crEditado:cr,loteConteos:{id:loteId,cr,ids:guardados,u:S.me}}]);}
+  return {writes,value:{guardados:guardados.length,conflictos}};
+ });
+}
+async function guardarGruposAnuales(tid,items,onProg){
+ const grupos=new Map(),t=S.data.tomas[tid],conflictos=[];let done=0,fail=0,guardados=0;
+ if(new Set(items.map(x=>x.id)).size!==items.length)throw new Error('Hay bienes repetidos en la importación. Revisa la vista previa.');
+ for(const x of items){const cr=crFijo(t,x.id);if(!grupos.has(cr))grupos.set(cr,[]);grupos.get(cr).push(x);}
+ for(const [cr,grupo]of grupos)for(let i=0;i<grupo.length;i+=100){
+  if(S.abortar)return {done,fail,guardados,omitidos:conflictos.length,conflictos};const lote=grupo.slice(i,i+100);
+  try{const r=await guardarLoteConteosCR(tid,cr,lote);guardados+=r.guardados;conflictos.push(...r.conflictos);
+   // Actualizar los conflictos solo tras resolver la transacción, sin sobrescribir propuestas.
+   for(const e of r.conflictos){if(e.actual)colObj(`tomas/${tid}/conteos`)[e.bid]=e.actual;else delete colObj(`tomas/${tid}/conteos`)[e.bid];}
+  }catch(e){fail+=lote.length;}
+  done+=lote.length;onProg&&onProg(done,items.length,fail);
+ }
+ return {done,fail,guardados,omitidos:conflictos.length,conflictos};
+}
 async function guardarGrupoConteos(tid,items,onProg){
+  if(esAnual(S.data.tomas[tid]))return guardarGruposAnuales(tid,items,onProg);
   const conflictos=[];let guardados=0;
   const r=await runMany(items.map(x=>async()=>{try{await put(`tomas/${tid}/conteos`,x.id,x.d,{anterior:x.anterior||null});guardados++;}catch(e){if(e.code==='conteo-conflict')conflictos.push(e);else throw e;}}),4,onProg);
   return {...r,guardados,omitidos:conflictos.length,conflictos};
