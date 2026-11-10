@@ -1798,6 +1798,12 @@ async function ambNombresGuardar(){ const G=S._an||[]; const cambios=[]; const e
   finally{ S.busy=false; ok.disabled=false; } }
 document.addEventListener('input',e=>{ if(e.target.id==='an-q') anFiltrar(); });
 Object.assign(ACT,{ ambNombres(){ if(!planos().some(p=>(p.ambientes||[]).length)){ toast('Aún no hay ambientes dibujados.'); return; } ambNombresModal(); } });
+// El respaldo se guarda como texto: Firestore indexa cada campo y una toma anual completa supera su límite de índices.
+async function respaldarTomaEliminada(t,C){
+  const id='toma-eliminada-'+uid(),datos=JSON.stringify({toma:t,conteos:structuredClone(C)}),nombre=`Respaldo_toma_${fileSafe(t.nombre)}_${today()}.json`;
+  if(new Blob([datos]).size>900000){await guardarArchivo(nombre,new Blob([datos],{type:'application/json'}));return {archivo:nombre};}
+  await put('config',id,{tipo:'Respaldo antes de eliminar toma',formato:'json',fecha:nowIso(),tomaId:t.id,nombre:t.nombre||'',conteos:Object.keys(C).length,datos});return {id};
+}
 Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
     cols.forEach(c=>{ out.colecciones[c]=structuredClone(S.data[c]||{}); });
     Object.keys(S.data.tomas||{}).forEach(id=>{ out.colecciones[`tomas/${id}/conteos`]=structuredClone(conteos(id)||{}); });
@@ -1809,7 +1815,7 @@ Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','
   openForm({title:'Eliminar toma de inventario', danger:true, ok:'Eliminar toma', note:`Se eliminará <b>${esc(t.nombre)}</b> de forma definitiva:<ul style="margin:6px 0 0;padding-left:18px">${F.length?`<li><b>${F.length}</b> fichas tocadas por el cierre interrumpido vuelven a su estado anterior (primero).</li>`:''}<li><b>${nC}</b> conteos registrados se borran.</li>${nS?`<li><b>${nS}</b> sobrantes se borran.</li>`:''}<li>Las fichas de los bienes no cambian en nada más.</li></ul><br>Esto no se puede deshacer.`,
     fields:[{k:'conf',l:'Para confirmar, escribe ELIMINAR',req:true,full:true,ph:'ELIMINAR'}],
     submit:async v=>{ if(String(v.conf||'').trim().toUpperCase()!=='ELIMINAR') return {error:'Escribe ELIMINAR para confirmar, o cancela.'};
-      await put('config','toma-eliminada-'+uid(),{tipo:'Respaldo antes de eliminar toma',fecha:nowIso(),toma:t,conteos:structuredClone(C)});
+      await respaldarTomaEliminada(t,C);
       if(F.length){ const r=await revertirFichas(t,F,(d,n)=>modalProgress(`1/2 · Revirtiendo fichas: ${d} de ${n}…`)); if(r.fail) return {error:`${r.fail} fichas no se pudieron revertir. No se eliminó la toma: vuelve a intentarlo.`}; }
       const ids=Object.keys(C); const r2=await runMany(ids.map(id=>()=>del(`tomas/${t.id}/conteos`,id)),4,(d,n)=>modalProgress(`2/2 · Borrando conteos: ${d} de ${n}…`));
       if(r2.fail) return {error:`${r2.fail} conteos no se pudieron borrar. Vuelve a intentarlo.`};
