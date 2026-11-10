@@ -677,7 +677,7 @@ async function guardarConteoUI(tid,bid,d,options){
 }
 async function guardarGrupoConteos(tid,items,onProg){
   const conflictos=[];let guardados=0;
-  const r=await runMany(items.map(x=>async()=>{try{await put(`tomas/${tid}/conteos`,x.id,x.d,{anterior:x.anterior||null});guardados++;}catch(e){if(e.code==='conteo-conflict')conflictos.push(e);else throw e;}}),4,onProg);
+  const r=await runMany(items.map(x=>async()=>{try{await put(`tomas/${tid}/conteos`,x.id,x.d,{anterior:x.anterior||null});guardados++;}catch(e){if(e.code==='conteo-conflict')conflictos.push(e);else throw e;}}),esAnual(S.data.tomas[tid])?1:4,onProg);
   return {...r,guardados,omitidos:conflictos.length,conflictos};
 }
 function conflictosGrupo(r){
