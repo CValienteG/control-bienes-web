@@ -1778,15 +1778,34 @@ async function readXlsx(buf){
 /* ---------- R1: identidad de las etiquetas ya impresas ---------- */
 const codigoTomaKey=c=>String(c??'').trim().toUpperCase();
 const V3_HEADERS=['ID','CODIGO CONTABLE','ACTIVO','FECHA DE INVENTARIO','EDIFICIO','PISO','UBICACIÓN','CANTIDAD','ESTADO','CODIGO ADMINISTRACION','CODIGO CR','CR','Prioridad CR'];
+const tituloV3=v=>norm(v).replace(/\s+/g,' ');
+function buscarCabeceraV3(sheets){
+ const sh=sheets.find(s=>tituloV3(s.name)==='etiqueta');if(!sh)return null;
+ const nombres=V3_HEADERS.map(tituloV3);
+ for(let ri=0;ri<sh.rows.length;ri++){
+  const row=sh.rows[ri]||[],mapa=nombres.map(h=>row.findIndex(v=>tituloV3(v)===h));
+  if(mapa.some(i=>i<0))continue;
+  for(const h of nombres)if(row.filter(v=>tituloV3(v)===h).length>1)throw new Error(`La fila ${ri+1} tiene el título «${V3_HEADERS[nombres.indexOf(h)]}» repetido. Revisa la cabecera V3.`);
+  const usadas=new Set(mapa),ancho=sh.rows.slice(ri).reduce((n,r)=>Math.max(n,r.length),0),ignoradas=[];
+  for(let ci=0;ci<ancho;ci++)if(!usadas.has(ci)&&(String(row[ci]??'').trim()||sh.rows.slice(ri+1).some(r=>r[ci]!=null&&r[ci]!=='')))ignoradas.push({columna:ci+1,titulo:String(row[ci]??'').trim()||'(sin título)'});
+  return {sh,ri,mapa,ignoradas};
+ }
+ // Una V3 incompleta nunca se deriva al lector antiguo perdiendo sus validaciones.
+ const candidata=sh.rows.findIndex(row=>nombres.filter(h=>(row||[]).some(v=>tituloV3(v)===h)).length>=8);
+ if(candidata>=0){const faltan=V3_HEADERS.filter(h=>!(sh.rows[candidata]||[]).some(v=>tituloV3(v)===tituloV3(h)));throw new Error(`Cabecera V3 incompleta en la fila ${candidata+1}. Faltan: ${faltan.join(', ')}.`);}
+ return null;
+}
+function avisoCabeceraV3(c){return `<p>Títulos encontrados en la fila ${c.ri+1} de «${esc(c.sh.name)}».</p>${c.ignoradas.length?`<p><b>Columnas ignoradas (no se importan):</b></p><ul>${c.ignoradas.map(x=>`<li>Columna ${x.columna}: ${esc(x.titulo)}</li>`).join('')}</ul>`:''}`;}
+const filaV3=(row,c)=>c.mapa.map(i=>row?.[i]);
+const esFilaTitulosV3=row=>V3_HEADERS.every((h,i)=>tituloV3(row[i])===tituloV3(h));
 const R1_FIELDS=['idEtq','crToma','crTomaNombre','prioridadCR'];
 function analizarIdentidadV3(sheets){
-  const sh=sheets.find(s=>s.name==='ETIQUETA');
-  if(!sh || V3_HEADERS.some((h,i)=>norm(sh.rows[13]?.[i])!==norm(h))) throw new Error('Selecciona la V3 original: hoja ETIQUETA y sus 13 columnas en la fila 14.');
+  const cabecera=buscarCabeceraV3(sheets);if(!cabecera)throw new Error('No encontré los 13 títulos de la V3 en la hoja ETIQUETA. Pueden estar en cualquier fila.');const {sh}=cabecera;
   const errores=[], filas=[], ids=new Set(), adms=new Set(), prioridades={}, B=S.data.bienes;
   const existentes=new Map();
   for(const [bid,b] of Object.entries(B)){ if(b.idEtq!=null){ const n=Number(b.idEtq); if(!Number.isSafeInteger(n)||n<1)errores.push(`El bien ${bid} tiene un ID no válido.`); if(existentes.has(n)) errores.push(`El ID ${n} está repetido en el registro.`); existentes.set(n,bid); } }
-  for(let i=14;i<sh.rows.length;i++){
-    const r=sh.rows[i]||[]; if(r.every(v=>v==null||v==='')) continue;
+  for(let i=cabecera.ri+1;i<sh.rows.length;i++){
+    const r=filaV3(sh.rows[i],cabecera); if(r.every(v=>v==null||v==='')||esFilaTitulosV3(r)) continue;
     const n=Number(r[0]), adm=String(r[9]??'').trim(), codigo=String(r[1]??'').trim(), cr=String(r[10]??'').trim(), nombre=String(r[11]??'').trim(), prioridad=Number(r[12]);
     const pref=`Fila ${i+1}: `; const b=B[adm];
     if(!Number.isSafeInteger(n)||n<1) errores.push(pref+'ID no válido.');
@@ -1805,7 +1824,7 @@ function analizarIdentidadV3(sheets){
   }
   if(!filas.length) errores.push('No hay bienes reconocidos para cargar.');
   const cambios=filas.filter(x=>R1_FIELDS.some(k=>x.d[k]!==B[x.id][k]));
-  return {errores,filas,cambios,prioridades,sinEtiqueta:Object.keys(B).filter(id=>!adms.has(id)&&B[id].idEtq==null)};
+  return {cabecera,errores,filas,cambios,prioridades,sinEtiqueta:Object.keys(B).filter(id=>!adms.has(id)&&B[id].idEtq==null)};
 }
 async function ejecutarIdentidadV3(r,archivo){
   exigirAdmin();
@@ -1828,7 +1847,7 @@ async function ejecutarIdentidadV3(r,archivo){
 Object.assign(ACT,{
   tCargarV3(){ openForm({title:'Cargar etiquetas desde la V3',note:'Usa la V3 con los ID fijos de las etiquetas impresas. Se completan ID, CR único y prioridad; se conserva el CR anterior como referencia.',fields:[{k:'archivo',l:'Archivo V3 (.xlsx)',t:'file',accept:'.xlsx',req:true,full:true}],ok:'Ver vista previa',submit:async v=>{
     let r; try{ r=analizarIdentidadV3(await parseFile(v.archivo)); }catch(e){ return {error:e.message}; }
-    const nota=`<b>${r.filas.length}</b> filas reconocidas · <b>${r.cambios.length}</b> bienes por actualizar · <b>${Object.keys(r.prioridades).length}</b> CR.<br><b>${r.sinEtiqueta.length}</b> bienes del registro quedan sin etiqueta y se conservan.<br>Los códigos y los valores contables se mantienen. Se guardará una copia de los campos anteriores antes de aplicar.`;
+    const nota=avisoCabeceraV3(r.cabecera)+`<b>${r.filas.length}</b> filas reconocidas · <b>${r.cambios.length}</b> bienes por actualizar · <b>${Object.keys(r.prioridades).length}</b> CR.<br><b>${r.sinEtiqueta.length}</b> bienes del registro quedan sin etiqueta y se conservan.<br>Los códigos y los valores contables se mantienen. Se guardará una copia de los campos anteriores antes de aplicar.`;
     openForm({title:'Vista previa de etiquetas V3',note:nota+(r.errores.length?`<p><b>${r.errores.length} errores: carga bloqueada.</b></p><ul>${r.errores.slice(0,30).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''),fields:r.errores.length?[]:[{k:'conf',l:'Escribe CARGAR para aplicar la carga',req:true,full:true}],ok:r.errores.length?'Volver':'Aplicar carga',submit:async w=>{
       if(r.errores.length){ setTimeout(()=>ACT.tCargarV3(),0); return; }
       if(w.conf!=='CARGAR') return {error:'Escribe CARGAR para confirmar.'};
@@ -2126,11 +2145,11 @@ function ubicar(fila){ const zn=edifZona(fila.edif); const p=planoDePiso(fila.pi
   return {sede,piso:fila.piso||'',ambiente,amb,cuad:fila.zona||'',pt:null,okPiso:!fila.piso,okZona:!fila.zona,okAmb:true}; }
 /* ---------- R4: V3 original, una fila por bien ---------- */
 async function analizarImport(file,t){
- const sheets=await parseFile(file);const sh=sheets.find(s=>s.name==='ETIQUETA'&&V3_HEADERS.every((h,i)=>norm(s.rows[13]?.[i])===norm(h)));
- if(!sh)return analizarImportAnterior(file,t);
- const r={tipo:'v3',hojas:['ETIQUETA'],errores:[],desconocidos:[],avisos:new Set(),filas:[],cantidades:[],choices:{},reg:new Map(),all:new Map()};
+ const sheets=await parseFile(file),cabecera=buscarCabeceraV3(sheets);
+ if(!cabecera)return analizarImportAnterior(file,t);const {sh}=cabecera;
+ const r={cabecera,tipo:'v3',hojas:['ETIQUETA'],errores:[],desconocidos:[],avisos:new Set(),filas:[],cantidades:[],choices:{},reg:new Map(),all:new Map()};
  const B=S.data.bienes,C=conteos(t.id),porID=new Map(),porCod=new Map();for(const [id,b]of Object.entries(B)){if(b.idEtq!=null)porID.set(Number(b.idEtq),id);const k=codigoTomaKey(b.codCont);if(!porCod.has(k))porCod.set(k,[]);porCod.get(k).push(id);}
- for(let ri=14;ri<sh.rows.length;ri++){const a=sh.rows[ri]||[];if(a.every(v=>v==null||v===''))continue;const adm=String(a[9]??'').trim(),cod=codigoTomaKey(a[1]),etq=a[0];
+ for(let ri=cabecera.ri+1;ri<sh.rows.length;ri++){const a=filaV3(sh.rows[ri],cabecera);if(a.every(v=>v==null||v==='')||esFilaTitulosV3(a))continue;const adm=String(a[9]??'').trim(),cod=codigoTomaKey(a[1]),etq=a[0];
   let candidatos=null;let desconocido=false;for(const lista of [adm?(B[adm]?[adm]:[]):null,cod?(porCod.get(cod)||[]):null,etq!==''&&etq!=null?(porID.has(Number(etq))?[porID.get(Number(etq))]:[]):null]){if(lista===null)continue;if(!lista.length){desconocido=true;break;}candidatos=candidatos===null?lista:candidatos.filter(x=>lista.includes(x));}
   if(desconocido){r.desconocidos.push({ri:ri+1,txt:[etq,cod,adm].filter(v=>v!==''&&v!=null).join(' · ')});continue;}
   if(!candidatos||candidatos.length!==1){r.errores.push(`Fila ${ri+1}: las identificaciones no coinciden o el código contable es ambiguo.`);continue;}
@@ -2157,7 +2176,7 @@ function actualizarV3(r){r.solapado=false;const reg=new Map();r.avisos=new Set()
  r.porActivo=new Map();for(const id of r.all.keys()){const k=activoKey(S.data.bienes[id].nombre);const g=r.porActivo.get(k)||{total:0,enc:0,nol:0,pend:0};g.total++;const c=reg.get(id);if(!c)g.pend++;else if(c.d.r==='Encontrado')g.enc++;else g.nol++;r.porActivo.set(k,g);}return r;
 }
 function previewV3(){S._imp.anteriores??=structuredClone(conteos(S._imp.r.toma));const {r,file}=S._imp;actualizarV3(r);const m=$('#modal');m.classList.add('wide');const prevOver=$('#imp-over')?.checked;
- m.innerHTML=`<form data-form="impok"><div class="m-h"><h2>Vista previa de la V3</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p>${esc(file)} · ${r.enc} encontrados · ${r.nol} no localizados · ${r.pend} pendientes en este archivo.</p><p>Los registros existentes se conservan salvo que marques reemplazarlos. Las filas sin datos no crean conteos.</p>
+ m.innerHTML=`<form data-form="impok"><div class="m-h"><h2>Vista previa de la V3</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b">${avisoCabeceraV3(r.cabecera)}<p>${esc(file)} · ${r.enc} encontrados · ${r.nol} no localizados · ${r.pend} pendientes en este archivo.</p><p>Los registros existentes se conservan salvo que marques reemplazarlos. Las filas sin datos no crean conteos.</p>
  ${r.cantidades.map(f=>`<div class="m-note"><b>Fila ${f.ri}: CANTIDAD ${f.n}</b> para ${esc(activoKey(S.data.bienes[f.id].nombre))}.<br>${f.apto?`Se pueden registrar los IDs ${esc([f.id,...f.siguientes].map(id=>S.data.bienes[id].idEtq).join(', '))}.`:'No hay suficientes IDs posteriores del mismo ACTIVO sin datos.'}<label>Qué aplicar<select class="inp" data-v3-cantidad="${f.ri}"><option value="omitir" ${!r.choices[f.ri]||r.choices[f.ri]==='omitir'?'selected':''}>Omitir esta cantidad hasta revisarla</option><option value="solo" ${r.choices[f.ri]==='solo'?'selected':''}>Registrar solo esta fila como 1 bien</option>${f.apto?`<option value="expandir" ${r.choices[f.ri]==='expandir'?'selected':''}>Aplicar a estos ${f.n} IDs del mismo ACTIVO</option>`:''}</select></label></div>`).join('')}
  ${r.yaReg?`<label class="chk"><input type="checkbox" id="imp-over" ${prevOver?'checked':''}> Reemplazar ${r.yaReg} conteos existentes (se guardará copia anterior)</label>`:''}
  ${r.errores.length?`<p class="err">Carga bloqueada:</p><ul>${r.errores.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
@@ -2218,9 +2237,9 @@ Object.assign(ACT,{
       submit:async v=>{ try{ localStorage.setItem('cb-tpl',v.modo); }catch(e){} modalProgress('Preparando la plantilla…'); const b=await plantillaToma(t,v.modo); await guardarArchivo(`Plantilla_toma_${fileSafe(t.nombre)}.xlsx`,b); } }); },
   tExcelConsol: async()=>{ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; toast('Preparando el consolidado…'); const b=await consolidadoToma(t); await guardarArchivo(`Consolidado_inventario_${fileSafe(t.nombre)}_${today()}.xlsx`,b); },
   tExcelImportar(){ const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]}; if(t.estado!=='abierta'){ toast('La toma está cerrada: no se pueden importar conteos.'); return; }
-    openForm({title:'Importar hoja de toma llenada', note:'Usa tu V3: hoja ETIQUETA con sus 13 columnas y encabezados en la fila 14. Una fila es un bien. Verás los resultados y las cantidades que requieren revisión antes de guardar.', ok:'Revisar archivo', wide:true,
+    openForm({title:'Importar hoja de toma llenada', note:'Usa tu V3: hoja ETIQUETA con sus 13 títulos en cualquier fila. Las columnas adicionales se ignoran y se enumeran en la vista previa. Una fila es un bien. Verás los resultados y las cantidades que requieren revisión antes de guardar.', ok:'Revisar archivo', wide:true,
       fields:[{k:'f',l:'Archivo Excel (.xlsx) o CSV',t:'file',accept:'.xlsx,.xlsm,.csv',req:true,full:true}],
-      submit:async v=>{ const file=v.f; if(!file) return {error:'Elige el archivo.'}; let r; try{ r=await analizarImport(file,t); }catch(e){ return {error:'No se pudo leer el archivo. Guárdalo como Excel (.xlsx) e inténtalo de nuevo.'}; }
+      submit:async v=>{ const file=v.f; if(!file) return {error:'Elige el archivo.'}; let r; try{ r=await analizarImport(file,t); }catch(e){ return {error:'No se pudo leer el archivo: '+e.message+'. Guárdalo como Excel (.xlsx) e inténtalo de nuevo.'}; }
         if(!r.hojas.length) return {error:'No encontré encabezados de toma (FECHA DE INVENTARIO, EDIFICIO, PISO, UBICACIÓN, CANTIDAD, ESTADO). Revisa que la hoja tenga esa fila de títulos.'};
         S._imp={r,file:file.name,anteriores:structuredClone(conteos(t.id))}; setTimeout(()=>impPreview(),30); return {keep:true}; } }); },
 });
