@@ -135,11 +135,44 @@ service cloud.firestore {
         && toma(inv.tomaId).crEstados[inv.cr].get('op', '') == inv.cierreCR;
     }
     function fichaEditable(bid, a, b) {
-      return (!fichaBloqueada(a) || reversionValida(bid, a, b)) && (
+      return identidadConservada(a, b) && regularizacionPermitida(a, b)
+        && (!fichaBloqueada(a) || reversionValida(bid, a, b)) && (
         !b.diff(a).affectedKeys().hasAny(['inv'])
         || (admin() && ((!resultadoAnual(a) && invPermitida(bid, b.get('inv', null)))
           || (b.get('inv', null) is map && 'tomaId' in b.inv && cierreValido(bid, b.inv))
           || (a.get('inv', null) is map && 'cierreCR' in a.inv && reversionValida(bid, a, b)))));
+    }
+    function identidadConservada(a, b) {
+      return (a.get('codigo', '') == '' || b.get('codigo', '') == a.codigo)
+        && (a.get('idEtq', null) == null || b.get('idEtq', null) == a.idEtq);
+    }
+    function historialAgregado(a, b) {
+      return b.get('hist', []) is list
+        && b.hist.size() == a.get('hist', []).size() + 1
+        && b.hist.removeAll([b.hist[b.hist.size() - 1]]) == a.get('hist', []);
+    }
+    function correccionCodigoValida(a, b) {
+      let m = b.get('regularizacionCodigo', {});
+      let h = b.hist[b.hist.size() - 1];
+      return admin() && historialAgregado(a, b)
+        && m.anterior == a.get('codCont', '') && m.nuevo == b.get('codCont', '')
+        && m.motivo is string && m.motivo.size() > 0 && m.u == request.auth.uid
+        && h.tipo == 'Código contable corregido' && h.motivo == m.motivo
+        && h.prev.codCont == m.anterior && h.nuevo.codCont == m.nuevo;
+    }
+    function marcaDuplicadoValida(a, b) {
+      let m = b.get('registroDuplicado', {});
+      let h = b.hist[b.hist.size() - 1];
+      return admin() && historialAgregado(a, b)
+        && m.activo is bool && m.motivo is string && m.motivo.size() > 0
+        && m.u == request.auth.uid && m.id is string && m.id.size() > 0
+        && h.tipo in ['Registro duplicado marcado', 'Registro duplicado desmarcado']
+        && h.nuevo.registroDuplicado == m;
+    }
+    function regularizacionPermitida(a, b) {
+      let cambios = b.diff(a).affectedKeys();
+      return (!cambios.hasAny(['codCont', 'regularizacionCodigo']) || correccionCodigoValida(a, b))
+        && (!cambios.hasAny(['registroDuplicado']) || marcaDuplicadoValida(a, b));
     }
     function actaEnProceso(tid, op, a) {
       let t = tomaDespues(tid);
@@ -198,7 +231,8 @@ service cloud.firestore {
     }
     match /bienes/{bid} {
       allow read: if activo();
-      allow create: if activo() && invPermitida(bid, request.resource.data.get('inv', null));
+      allow create: if activo() && (admin() || !request.resource.data.keys().hasAny(['registroDuplicado', 'regularizacionCodigo']))
+        && invPermitida(bid, request.resource.data.get('inv', null));
       allow update: if activo() && fichaEditable(bid, resource.data, request.resource.data);
       allow delete: if false;
     }

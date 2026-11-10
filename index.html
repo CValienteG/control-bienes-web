@@ -90,6 +90,7 @@ select.inp{max-width:100%;min-width:0}
 .btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
 .btn.ghost{border-color:transparent;background:transparent}
 .btn.sm{padding:4px 9px;font-size:13px}
+.btn.contable-ref{white-space:normal;text-align:left;max-width:100%;overflow-wrap:anywhere}
 .btn[disabled]{opacity:.5;cursor:not-allowed}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .row.between{justify-content:space-between}
@@ -556,11 +557,11 @@ async function retry(fn){
   }
 }
 const colObj = path => (S.data[path] ||= {});
-const CLAVES_TECNICAS=new Set(['hist','act','creado','imp','origenDatos','_m','_rev','_del','prev','u','t','origen']);
+const CLAVES_TECNICAS=new Set(['hist','act','creado','imp','origenDatos','regularizacionCodigo','_m','_rev','_del','prev','u','t','origen']);
 function conOrigen(d,tipo='registro manual',archivo='',b={}){const origen={...(b.origenDatos||{}),...(d.origenDatos||{})};for(const k of Object.keys(d))if(!CLAVES_TECNICAS.has(k)&&JSON.stringify(d[k])!==JSON.stringify(b[k]))origen[k]={tipo,archivo,fecha:nowIso(),u:S.me||null};return {...d,origenDatos:origen};}
 function anotarConteo(d,antes){const tipo=d.origen||(d.imp?'importación':'registro manual');return conOrigen(d,tipo,tipo==='importación'?(typeof d.imp==='object'?d.imp.archivo:d.imp||''):'',antes||{});}
 function procedenciaCampo(b,k){const meta=b.origenDatos?.[k];if(meta)return `${meta.tipo}${meta.archivo?' · '+meta.archivo:''}${meta.fecha?' · '+fmtDT(meta.fecha):''}`;for(const h of (b.hist||[]).slice().reverse()){if(h.nuevo&&Object.hasOwn(h.nuevo,k))return `${/lote/i.test(h.tipo)?'lote':/import/i.test(h.tipo)?'importación':'registro manual'} · ${fmtDT(h.t)}`;}if(b.imp)return 'importación · '+(typeof b.imp==='object'?b.imp.archivo||'archivo no registrado':b.imp);return 'Origen no registrado en los datos anteriores';}
-function origenFichaHtml(b){const campos=Object.keys(b).filter(k=>!CLAVES_TECNICAS.has(k)&&k!=='id'&&b[k]!=null&&!k.startsWith('_'));return `<section><h3 class="sec">Origen de los datos</h3><div class="tbl-wrap"><table><thead><tr><th>Dato</th><th>Origen</th></tr></thead><tbody>${campos.map(k=>`<tr><td>${esc(({idEtq:'ID de etiqueta',crToma:'CR',crTomaNombre:'Nombre del CR',prioridadCR:'Prioridad CR',crOriginal:'CR original',crs:'CR de origen',cuenta:'Cuenta contable',seccion:'Sección',cargoResp:'Cargo responsable',dupRegistro:'Duplicado contable',inv:'Última verificación',fechaAlta:'Fecha de alta',cuad:'Cuadrante',pt:'Punto en plano',amb:'Ambiente del plano',ubicacion:'Ubicación',etapa:'Etapa',ejemplo:'Dato de ejemplo'})[k]||IMP_LABEL[k]||k)}</td><td>${esc(procedenciaCampo(b,k))}</td></tr>`).join('')}</tbody></table></div><p class="small muted">Los datos anteriores sin trazabilidad se indican como origen no registrado.</p></section>`;}
+function origenFichaHtml(b){const campos=Object.keys(b).filter(k=>!CLAVES_TECNICAS.has(k)&&k!=='id'&&b[k]!=null&&!k.startsWith('_'));return `<section><h3 class="sec">Origen de los datos</h3><div class="tbl-wrap"><table><thead><tr><th>Dato</th><th>Origen</th></tr></thead><tbody>${campos.map(k=>`<tr><td>${esc(({idEtq:'ID de etiqueta',crToma:'CR',crTomaNombre:'Nombre del CR',prioridadCR:'Prioridad CR',crOriginal:'CR original',crs:'CR de origen',cuenta:'Cuenta contable',seccion:'Sección',cargoResp:'Cargo responsable',dupRegistro:'Código contable compartido en la fuente',registroDuplicado:'Registro duplicado',regularizacionCodigo:'Corrección del código contable',inv:'Última verificación',fechaAlta:'Fecha de alta',cuad:'Cuadrante',pt:'Punto en plano',amb:'Ambiente del plano',ubicacion:'Ubicación',etapa:'Etapa',ejemplo:'Dato de ejemplo'})[k]||IMP_LABEL[k]||k)}</td><td>${esc(procedenciaCampo(b,k))}</td></tr>`).join('')}</tbody></table></div><p class="small muted">Los datos anteriores sin trazabilidad se indican como origen no registrado.</p></section>`;}
 
 async function put(path,id,data,options){
   exigirEscritura();if(path==='bienes'){const tipo=data.imp?'importación':/lote/i.test(data.hist?.at(-1)?.tipo||'')?'lote':'registro manual';data=conOrigen(data,tipo,typeof data.imp==='object'?data.imp.archivo:data.imp||'',S.data.bienes[id]||{});}
@@ -608,15 +609,80 @@ const bienes = () => Object.entries(S.data.bienes).map(([id,b])=>({id,...b}));
 const mants = () => Object.entries(S.data.mantenimientos).map(([id,m])=>({id,...m}));
 const tomas = () => Object.entries(S.data.tomas).map(([id,t])=>({id,...t}));
 const conteos = tid => S.data[`tomas/${tid}/conteos`] || {};
+/* Códigos contables compartidos y regularización de registros duplicados. */
+const CODIGO_COMPARTIDO='Código contable compartido';
+const REGISTRO_DUPLICADO='Registro duplicado';
+const PROPUESTA_DUPLICADO='Propuesta de baja como duplicado';
+function codigoContableKey(v){return String(v??'').normalize('NFKC').toUpperCase().replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g,'-').replace(/[\s-]+/g,'');}
+function codigoContableTexto(v){return String(v??'').normalize('NFKC').trim().toUpperCase().replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g,'-').replace(/\s*-\s*/g,'-').replace(/-+/g,'-').replace(/\s+/g,' ');}
+function indiceCodigosContables(B=bienes()){
+ const M=new Map();for(const b of B){if(b._del)continue;const k=codigoContableKey(b.codCont);if(!k)continue;if(!M.has(k))M.set(k,[]);M.get(k).push(b);}return M;
+}
+function codigosCompartidos(B=bienes()){return [...indiceCodigosContables(B)].filter(([,L])=>new Set(L.map(b=>b.id)).size>1).map(([key,L])=>({key,codigo:codigoContableTexto(L[0].codCont),bienes:L})).sort((a,b)=>a.codigo.localeCompare(b.codigo,'es',{numeric:true}));}
+function paresCodigo(id,b=S.data.bienes[id],B=null,indice=null){const k=codigoContableKey(b?.codCont);return k?((indice||indiceCodigosContables(B||bienes())).get(k)||[]).filter(x=>x.id!==id):[];}
+function referenciaBienContable(b){return `${b.idEtq!=null?'ID '+b.idEtq:'Sin ID de etiqueta'} · ${b.codigo||b.id} · ${b.nombre||'Sin descripción'} · CR ${crReporte(b)}`;}
+function enlacesBienesContables(L){return L.map(b=>`<li><button type="button" class="btn link contable-ref" data-act="openBien" data-id="${esc(b.id)}">${esc(referenciaBienContable(b))}</button></li>`).join('');}
+function atencionCodigosCompartidos(){const G=codigosCompartidos();return G.length?`<div data-codigos-compartidos><h4>Códigos contables compartidos</h4>${G.map(g=>`<div class="li" style="display:block"><b>${esc(CODIGO_COMPARTIDO)}: ${esc(g.codigo)}</b><ul>${enlacesBienesContables(g.bienes)}</ul></div>`).join('')}</div>`:'';}
+function avisoFichaContable(id,b){const L=paresCodigo(id,b);return `${L.length?`<section class="banner warn" style="display:block"><b>${esc(CODIGO_COMPARTIDO)} con:</b><ul>${enlacesBienesContables(L)}</ul></section>`:''}${b.registroDuplicado?.activo?`<section class="banner warn" style="display:block"><b>${REGISTRO_DUPLICADO}</b><p>${esc(b.registroDuplicado.motivo)}</p><p>${PROPUESTA_DUPLICADO}. En las tomas abiertas queda «Por conciliar».</p></section>`:''}`;}
+function avisosCodigosImportacion(filas){
+ const base=indiceCodigosContables(),archivo=new Map();
+ for(const f of filas){const key=codigoContableKey(f.codCont);if(!key)continue;if(!archivo.has(key))archivo.set(key,[]);archivo.get(key).push(f);}
+ return [...archivo].filter(([k,L])=>L.length>1||(base.get(k)||[]).length).map(([k,L])=>({codigo:codigoContableTexto(L[0].codCont),filas:L.map(f=>f.fila),bienes:base.get(k)||[],enArchivo:L.length>1}));
+}
+function avisoCodigosImportacionHtml(avisos){return avisos?.length?`<div class="m-note" data-aviso-codigos><h3>Códigos contables compartidos</h3><p>Es un aviso: no bloquea la importación. El ID de etiqueta y el código ADM identifican cada bien.</p>${avisos.map(a=>`<p><b>${esc(a.codigo)}</b>${a.enArchivo?` · repetido en el archivo, filas ${a.filas.join(', ')}`:''}${a.bienes.length?` · ya existe en ${a.bienes.length} ${a.bienes.length===1?'bien':'bienes'} de la base`:''}</p>${a.bienes.length?`<ul>${enlacesBienesContables(a.bienes)}</ul>`:''}`).join('')}</div>`:'';}
+function codigosContablesBusqueda(b){return [...new Set([b.codCont,b.regularizacionCodigo?.anterior,...(b.hist||[]).filter(h=>h.tipo==='Código contable corregido').map(h=>h.prev?.codCont)].map(codigoContableKey).filter(Boolean))];}
+function esRegistroDuplicado(b){return b?.registroDuplicado?.activo===true;}
+function duplicadoEnToma(t,id,b=S.data.bienes[id]){return esRegistroDuplicado(b)&&(t.esperados||[]).includes(id)&&t.estado==='abierta'&&(!esAnual(t)||estadoCR(t,crFijo(t,id))!=='cerrada');}
+function resultadoToma(t,id,C=conteos(t.id)){if(duplicadoEnToma(t,id))return 'Por conciliar';return C[id]?.r||((t.estado==='cerrada'||(esAnual(t)&&estadoCR(t,crFijo(t,id))==='cerrada'))?'No localizado':'Pendiente');}
+function conteoDuplicado(d,b){if(!esRegistroDuplicado(b))return d;if(!d)throw new Error('Este registro duplicado debe permanecer Por conciliar. Desmárcalo como administrador para resolverlo.');return {...d,r:'Por conciliar',registroDuplicado:true};}
+async function guardarEdicionFicha(id,campos,motivo,esperada){
+ return transaccionCR([`bienes/${id}`],([b])=>{
+  exigirEscritura();if(!b)throw new Error('La ficha ya no existe.');permisoDocumento('bienes',id,campos);
+  if(campos.codigo!==undefined&&campos.codigo!==b.codigo)throw new Error('El código ADM es inmutable.');
+  const cambios=Object.keys(campos).filter(k=>JSON.stringify(campos[k]??'')!==JSON.stringify(esperada[k]??''));
+  if(cambios.some(k=>JSON.stringify(b[k]??'')!==JSON.stringify(esperada[k]??'')))throw new Error('Otra persona cambió la ficha. Ábrela de nuevo antes de guardar.');
+  if(!cambios.length)return {};
+  const cambioCodigo=campos.codCont!==undefined&&campos.codCont!==(b.codCont||'');
+  let meta={},evento=ev('Ficha editada','Campos: '+cambios.join(', '));
+  if(cambioCodigo){exigirAdmin();if(!String(motivo||'').trim())throw new Error('Indica el motivo de la corrección del código contable.');
+   meta={regularizacionCodigo:{anterior:b.codCont||'',nuevo:campos.codCont,motivo:String(motivo).trim(),u:S.me,t:nowIso()}};
+   evento={...ev('Código contable corregido',`${b.codCont||'Sin código'} → ${campos.codCont||'Sin código'}. Motivo: ${motivo.trim()}`),prev:{codCont:b.codCont||''},nuevo:{codCont:campos.codCont},motivo:motivo.trim()};
+  }
+  const d=Object.fromEntries(cambios.map(k=>[k,campos[k]]));return {writes:[[`bienes/${id}`,{...b,...conOrigen(d,'registro manual','',b),...meta,hist:[...(b.hist||[]),evento],act:nowIso()}]]};
+ });
+}
+async function cambiarRegistroDuplicado(id,activo,motivo,esperada){
+ exigirAdmin();motivo=String(motivo||'').trim();if(!motivo)throw new Error('Indica el motivo.');
+ const T=DB?await coleccionCR('tomas'):S.data.tomas;
+ const tomasAfectadas=Object.entries(T).filter(([,t])=>!t._del&&t.estado==='abierta'&&(t.esperados||[]).includes(id));
+ const paths=[`bienes/${id}`,...tomasAfectadas.map(([tid])=>`tomas/${tid}`),...tomasAfectadas.map(([tid])=>`tomas/${tid}/conteos/${id}`)];
+ return transaccionCR(paths,docs=>{
+  exigirAdmin();const b=docs[0];if(!b)throw new Error('La ficha ya no existe.');permisoDocumento('bienes',id,{});
+  if(firmaDatos(b.registroDuplicado||null)!==firmaDatos(esperada||null))throw new Error('La marca de registro duplicado cambió. Revisa la ficha de nuevo.');
+  const fecha=nowIso(),marca={activo,motivo,u:S.me,t:fecha,id:uid()},writes=[],afectadas=[];
+  tomasAfectadas.forEach(([tid],i)=>{
+   const t=docs[1+i],c=docs[1+tomasAfectadas.length+i];if(!t||t.estado!=='abierta'||!(t.esperados||[]).includes(id))throw new Error('Una toma cambió. Revisa de nuevo.');
+   const cr=esAnual(t)?crFijo(t,id):null,estado=cr?estadoCR(t,cr):'abierta';
+   if(estado==='cerrada')return;if(estado!=='abierta')throw new Error('Hay un cierre por CR en curso. Espera a que termine.');
+   if(cr==='SIN_CR')return;
+   if(activo||c?.registroDuplicado){const nuevo={...(c||{}),r:'Por conciliar',registroDuplicado:activo,u:S.me,t:fecha,_rev:uid(),...(c?{prev:c}:{})};writes.push([`tomas/${tid}/conteos/${id}`,anotarConteo(nuevo,c)]);
+    if(cr)writes.push([`tomas/${tid}`,{...t,crEditado:cr,crEstados:{...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}}}]);afectadas.push(tid);
+   }
+  });
+  const evento={...ev(activo?'Registro duplicado marcado':'Registro duplicado desmarcado',`${motivo}${activo?'. '+PROPUESTA_DUPLICADO:'. Revisar el resultado de los conteos que quedan Por conciliar.'}`),prev:{registroDuplicado:b.registroDuplicado||null},nuevo:{registroDuplicado:marca},tomas:afectadas};
+  writes.push([`bienes/${id}`,{...b,...conOrigen({registroDuplicado:marca},'registro manual','',b),hist:[...(b.hist||[]),evento],act:fecha}]);return {writes};
+ });
+}
+
 /* ---------- Etapa 2.5: permisos y conteos compartidos ---------- */
-const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','tFormato71','uImportar','uUsuarios','sCategorias']);
+const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','registroDuplicado','tFormato71','uImportar','uUsuarios','sCategorias']);
 let accionActual=null, actividadT=null;
 function errorPermiso(msg){ return Object.assign(new Error(msg),{code:'app-permission'}); }
 function exigirEscritura(){ if(S.readonly) throw errorPermiso('Tienes acceso de solo lectura.'); }
 function exigirAdmin(){ exigirEscritura(); if(!S.admin) throw errorPermiso('Solo un administrador puede realizar esta acción.'); }
 function exigirLote(n){ exigirEscritura(); if(n>=100) exigirAdmin(); }
 function permisoDocumento(path,id,d){
-  if(path==='bienes'){const inv=S.data.bienes[id]?.inv,t=S.data.tomas[inv?.tomaId];if(inv?.cierreCR&&t?.crEstados?.[inv.cr]?.op===inv.cierreCR&&['cerrando','revirtiendo'].includes(estadoCR(t,inv.cr)))throw new Error('Esta ficha está en un cierre por CR. Espera a que termine para editarla.');}
+  if(path==='bienes'){const b=S.data.bienes[id];if(d){if(b?.codigo&&d.codigo!==undefined&&d.codigo!==b.codigo)throw new Error('El código ADM es inmutable.');if(b?.idEtq!=null&&d.idEtq!==undefined&&d.idEtq!==b.idEtq)throw new Error('El ID de etiqueta es inmutable.');if((b&&d.codCont!==undefined&&d.codCont!==(b.codCont||''))||d.registroDuplicado!==undefined||d.regularizacionCodigo!==undefined)exigirAdmin();}const inv=S.data.bienes[id]?.inv,t=S.data.tomas[inv?.tomaId];if(inv?.cierreCR&&t?.crEstados?.[inv.cr]?.op===inv.cierreCR&&['cerrando','revirtiendo'].includes(estadoCR(t,inv.cr)))throw new Error('Esta ficha está en un cierre por CR. Espera a que termine para editarla.');}
   if(path==='tomas'&&(!d||'cierre' in d||'uCierre' in d||d.estado==='cerrada')) exigirAdmin();
   if(path==='config'&&/^(activoAlias$|crPrioridad$|sistemasCategorias$|activo-alias-prev-|toma-r1-|toma-r3-|toma-eliminada-)/.test(id)) exigirAdmin();
 }
@@ -643,21 +709,21 @@ async function escribirConteo(path,bid,datos,{anterior=null}={}){
   exigirEscritura(); const tid=path.split('/')[1],esperado=versionConteo(anterior);
   // La revisión cambia incluso si el contenido vuelve a ser igual. No se publica nada de forma optimista.
   const nuevo=datos?{...structuredClone(datos),u:S.me||null,_rev:uid()}:null;
-  const decidir=(t,raw)=>{
+  const decidir=(t,raw,b)=>{
     exigirEscritura(); const actual=limpioConteo(raw);
     if(!t||t._del||t.estado!=='abierta')throw new Error('La toma ya no está abierta.');
     validarRegistroCR(t,bid);
     if(versionConteo(actual)!==esperado)return {conflicto:true,actual};
     const cr=esAnual(t)?crFijo(t,bid):null;
-    return {dato:nuevo?{...anotarConteo(nuevo,actual),...(actual?{prev:actual}:{})}:null,...(cr?{crEditado:cr,crEstados:{...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}}}:{})};
+    const preparado=conteoDuplicado(nuevo,b);return {dato:preparado?{...anotarConteo(preparado,actual),...(actual?{prev:actual}:{})}:null,...(cr?{crEditado:cr,crEstados:{...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}}}:{})};
   };
   const resultado=await queue(path+'/'+bid,async()=>{
-    if(!DB)return decidir(S.data.tomas[tid],colObj(path)[bid]);
+    if(!DB)return decidir(S.data.tomas[tid],colObj(path)[bid],S.data.bienes[bid]);
     if(typeof DB.runTransaction!=='function')throw new Error('Conecta Firebase para guardar un conteo compartido.');
     return DB.runTransaction(async tx=>{
       const tr=DB.doc('tomas/'+tid),cr=DB.doc(path+'/'+bid);
-      const [ts,cs]=await Promise.all([tx.get(tr),tx.get(cr)]);
-      const r=decidir(ts.exists?ts.data():null,cs.exists?cs.data():null);
+      const [ts,cs,bs]=await Promise.all([tx.get(tr),tx.get(cr),tx.get(DB.doc("bienes/"+bid))]);
+      const r=decidir(ts.exists?ts.data():null,cs.exists?cs.data():null,bs.exists?bs.data():null);
       if(!r.conflicto){tx.set(cr,r.dato||{_del:true});if(r.crEstados)tx.update(tr,{crEstados:r.crEstados,crEditado:r.crEditado});}
       return r;
     });
@@ -685,7 +751,8 @@ async function guardarConteoUI(tid,bid,d,options){
 async function guardarLoteConteosCR(tid,cr,items){
  exigirEscritura();if(!items.length||items.length>100||new Set(items.map(x=>x.id)).size!==items.length)throw new Error('El lote debe contener de 1 a 100 bienes distintos.');
  const loteId=uid(),nuevos=items.map(x=>({...structuredClone(x.d),u:S.me||null,_rev:uid()}));
- return transaccionCR([`tomas/${tid}`,...items.map(x=>`tomas/${tid}/conteos/${x.id}`)],([t,...raws])=>{
+ return transaccionCR([`tomas/${tid}`,...items.map(x=>`tomas/${tid}/conteos/${x.id}`),...items.map(x=>`bienes/${x.id}`)],([t,...docs])=>{
+  const raws=docs.slice(0,items.length),fichas=docs.slice(items.length);
   exigirEscritura();if(!t||t._del||t.estado!=='abierta'||!esAnual(t))throw new Error('La toma anual ya no está abierta.');
   const conflictos=[],writes=[],guardados=[];
   items.forEach((x,i)=>{
@@ -694,7 +761,7 @@ async function guardarLoteConteosCR(tid,cr,items){
    if(versionConteo(actual)!==versionConteo(x.anterior||null)){
     conflictos.push(Object.assign(new Error(`Ya registrado por ${actual?who(actual.u):'otra persona'} en ${actual?ubic(actual)||'sin ubicación':'un registro que cambió'}.`),{code:'conteo-conflict',tid,bid:x.id,actual,propuesto:nuevos[i]}));return;
    }
-   const d={...anotarConteo(nuevos[i],actual),...(actual?{prev:actual}:{})};guardados.push(x.id);writes.push([`tomas/${tid}/conteos/${x.id}`,d]);
+   const d={...anotarConteo(conteoDuplicado(nuevos[i],fichas[i]),actual),...(actual?{prev:actual}:{})};guardados.push(x.id);writes.push([`tomas/${tid}/conteos/${x.id}`,d]);
   });
   if(guardados.length){const estados={...t.crEstados,[cr]:{...t.crEstados[cr],revision:(t.crEstados[cr].revision||0)+1}};writes.push([`tomas/${tid}`,{...t,crEstados:estados,crEditado:cr,loteConteos:{id:loteId,cr,ids:guardados,u:S.me}}]);}
   return {writes,value:{guardados:guardados.length,conflictos}};
@@ -729,7 +796,7 @@ function distinct(field){ const key=Object.keys(S.data.bienes).length+'|'+(S._ve
 function nextCode(tipo){ const p=(tipo||'AF')+'-'; let max=0; bienes().forEach(b=>{ if(b.codigo && b.codigo.toUpperCase().startsWith(p)){ const n=parseInt(b.codigo.slice(p.length),10); if(n>max) max=n; } }); return p+String(max+1).padStart(4,'0'); }
 function mEstado(m){ if(m.estado==='programado' && m.fechaProg && m.fechaProg < today()) return 'vencido'; return m.estado; }
 function bienLabel(b){ return b ? `${b.codigo? b.codigo+' · ':''}${b.nombre||'Sin nombre'}` : 'Bien eliminado'; }
-function tomaProg(t){ if(esAnual(t))return avanceCR(t); if(t.estado==='cerrada' && t.resumen) return {ok:t.resumen.enc+t.resumen.conc, tot:t.resumen.tot, ...t.resumen}; const c=conteos(t.id); const esp=t.esperados||[]; let enc=0,conc=0,nol=0; esp.forEach(id=>{ const r=c[id]?.r; if(r==='Encontrado') enc++; else if(r==='Por conciliar') conc++; else if(r==='No localizado') nol++; }); return {ok:enc+conc, ver:enc+conc+nol, enc, conc, nol, tot:esp.length}; }
+function tomaProg(t){ if(esAnual(t))return avanceCR(t); if(t.estado==='cerrada' && t.resumen) return {ok:t.resumen.enc+t.resumen.conc, tot:t.resumen.tot, ...t.resumen}; const c=conteos(t.id); const esp=t.esperados||[]; let enc=0,conc=0,nol=0; esp.forEach(id=>{ const r=resultadoToma(t,id,c); if(r==='Encontrado') enc++; else if(r==='Por conciliar') conc++; else if(r==='No localizado') nol++; }); return {ok:enc+conc, ver:enc+conc+nol, enc, conc, nol, tot:esp.length}; }
 
 /* ---------- Render ---------- */
 let rq=false;
@@ -795,13 +862,14 @@ function vResumen(){
     <button class="tile ${venc.length?'crit':''}" data-act="goMant" data-mf="vencidos"><b class="num">${venc.length}</b><span>Mantenimientos vencidos<br>${prox.length} próximos en 30 días</span></button>
     <button class="tile ${nPend?'attn':''}" data-act="go" data-v="ciclo"><b class="num">${nPend}</b><span>Trámites pendientes<br>requerimientos, altas y bajas</span></button>
   </div>`;
-  const att=[];
+  const att=[];B.filter(esRegistroDuplicado).forEach(b=>att.push({id:b.id,t:`${REGISTRO_DUPLICADO}: ${bienLabel(b)}`,d:b.registroDuplicado.motivo,c:'c-warn',ch:REGISTRO_DUPLICADO}));
   venc.forEach(m=>{ const b=S.data.bienes[m.bienId]; att.push({id:m.bienId, t:`Mantenimiento vencido: ${bienLabel(b)}`, d:`${m.tipo} programado para el ${fmtD(m.fechaProg)} (hace ${-daysFrom(m.fechaProg)} días)`, c:'c-bad', ch:'Vencido'}); });
   B.filter(b=>b.etapa==='requerimiento').forEach(b=>att.push({id:b.id, t:`Requerimiento por aprobar: ${b.nombre}`, d:`${b.area||''}${b.solicitante?' · solicita '+b.solicitante:''}`, c:'c-info', ch:'Aprobar'}));
   B.filter(b=>b.etapa==='recibido').forEach(b=>att.push({id:b.id, t:`Recibido sin alta: ${b.nombre}`, d:`Asígnale código, ubicación y custodio`, c:'c-warn', ch:'Dar de alta'}));
   B.filter(b=>b.etapa==='baja_solicitada').forEach(b=>att.push({id:b.id, t:`Baja por aprobar: ${bienLabel(b)}`, d:b.motivoBaja||'', c:'c-bad', ch:'Revisar baja'}));
   act.filter(b=>b.oper==='Inoperativo' && b.etapa==='en_uso').slice(0,10).forEach(b=>att.push({id:b.id, t:`Inoperativo en uso: ${bienLabel(b)}`, d:`${ubic(b)||b.area||''} · programa un mantenimiento o solicita la baja`, c:'c-bad', ch:'Inoperativo'}));
-  const attHtml = att.length ? `<div class="list">${att.slice(0,8).map(a=>`<div class="li"><div class="grow"><button class="btn link" data-act="openBien" data-id="${esc(a.id)}">${esc(a.t)}</button><div class="small muted">${esc(a.d)}</div></div>${chip(a.ch,a.c)}</div>`).join('')}${att.length>8?`<div class="li small muted">y ${att.length-8} más…</div>`:''}</div>` : `<p class="hint">Nada pendiente por ahora. Aquí aparecerán mantenimientos vencidos, requerimientos por aprobar y bajas por revisar.</p>`;
+  const compartidosHtml=atencionCodigosCompartidos();
+  const attHtml = att.length ? `<div class="list">${att.slice(0,8).map(a=>`<div class="li"><div class="grow"><button class="btn link" data-act="openBien" data-id="${esc(a.id)}">${esc(a.t)}</button><div class="small muted">${esc(a.d)}</div></div>${chip(a.ch,a.c)}</div>`).join('')}${att.length>8?`<div class="li small muted">y ${att.length-8} más…</div>`:''}</div>` : compartidosHtml?'':`<p class="hint">Nada pendiente por ahora. Aquí aparecerán mantenimientos vencidos, requerimientos por aprobar y bajas por revisar.</p>`;
   // Por área
   const byA={}; act.forEach(b=>{ const u=b.area||'Sin área'; byA[u]=byA[u]||{v:0,s:0}; b.inv&&b.inv.r!=='No localizado'?byA[u].v++:byA[u].s++; });
   let as=Object.entries(byA).sort((a,b)=>(b[1].v+b[1].s)-(a[1].v+a[1].s)); const rest=as.slice(10); as=as.slice(0,10);
@@ -810,7 +878,7 @@ function vResumen(){
   const byC=COND.map(c=>[c, act.filter(b=>(b.condicion||'Por evaluar')===c).length]);
   const condHtml = `<div class="bars">${byC.map(([c,n])=>`<div class="bar-row"><span>${condChip(c)}</span><div class="bar"><i style="width:${n/Math.max(1,act.length)*100}%;background:var(--${{Bueno:'ok',Regular:'accent',Malo:'warn','Por evaluar':'muted'}[c]})"></i></div><span class="num small">${n}</span></div>`).join('')}</div>`;
   const inv = abierta ? (()=>{ const p=tomaProg(abierta); return `<div class="card"><div class="card-h"><h3>Toma de inventario en curso</h3><button class="btn sm" data-act="openToma" data-id="${esc(abierta.id)}">Continuar conteo</button></div><div class="row between small"><span>${esc(abierta.nombre)}</span><span class="num">${p.ver} de ${p.tot} verificados</span></div><div class="progress" style="margin-top:6px"><i style="width:${p.tot?p.ver/p.tot*100:0}%"></i></div></div>`; })() : (sinV ? `<div class="banner"><span class="grow"><b>${sinV.toLocaleString('es-PE')} bienes</b> aún no tienen verificación física. Inicia una toma de inventario por área para confirmar dónde están y en qué estado.</span><button class="btn sm primary ro-hide" data-act="tNueva">Nueva toma de inventario</button></div>` : '');
-  return `<div class="row between"><h2>Resumen</h2><div class="row ro-hide"><button class="btn" data-act="importar">Dar de alta bienes desde Excel</button><button class="btn primary" data-act="nuevoExistente">Registrar bien</button></div></div>${tiles}${inv}<div class="grid2"><div class="card"><div class="card-h"><h3>Requiere atención</h3></div>${attHtml}</div><div class="card"><div class="card-h"><h3>Bienes por área (CR)</h3></div>${areaHtml}<div class="card-h" style="margin:20px 0 12px"><h3>Conservación de los bienes</h3></div>${condHtml}</div></div>`;
+  return `<div class="row between"><h2>Resumen</h2><div class="row ro-hide"><button class="btn" data-act="importar">Dar de alta bienes desde Excel</button><button class="btn primary" data-act="nuevoExistente">Registrar bien</button></div></div>${tiles}${inv}<div class="grid2"><div class="card"><div class="card-h"><h3>Requiere atención</h3></div>${compartidosHtml}${attHtml}</div><div class="card"><div class="card-h"><h3>Bienes por área (CR)</h3></div>${areaHtml}<div class="card-h" style="margin:20px 0 12px"><h3>Conservación de los bienes</h3></div>${condHtml}</div></div>`;
 }
 function emptyStart(){
   return `<div class="card" style="max-width:660px;justify-self:center;display:grid;gap:12px;padding:28px"><h2>Empieza tu registro de bienes</h2><p class="muted" style="margin:0">Importa tu registro de activos desde Excel, registra los bienes uno por uno o inicia el ciclo completo desde un requerimiento.</p><div class="row ro-hide"><button class="btn" data-act="importar">Dar de alta bienes desde Excel</button><button class="btn" data-act="nuevoExistente">Registrar un bien</button><button class="btn" data-act="nuevoReq">Crear requerimiento</button></div></div>`;
@@ -877,7 +945,7 @@ function vBienes(){
 function tomaGrupos(){if(S.view==='inventario'&&S.tomaSel)return {id:S.tomaSel,...S.data.tomas[S.tomaSel]};const T=tomas().filter(t=>t.estado==='abierta').sort((a,b)=>ordenFecha(b.creado)-ordenFecha(a.creado));return T.find(t=>t.id===S.grToma)||T[0]||null;}
 function grupoId(b,cfg=S.data.config.gruposBienes||{}){return cfg.asignaciones?.[b.id]||'auto:'+activoKey(b.nombre);}
 function grupoNombre(id,cfg=S.data.config.gruposBienes||{}){return cfg.nombres?.[id]||id.replace(/^auto:/,'');}
-function datoGrupo(b,t){const c=t?limpioConteo(conteos(t.id)[b.id]):null;return {c,r:t?(c?.r||(esAnual(t)?resultadoAnual(t,b.id):t.estado==='cerrada'?'No localizado':'Pendiente')):b.inv?.r||'Pendiente',u:c?ubic(c):t?'Sin registrar en la toma':ubic(b)||'Sin ubicación',estado:c?c.c||'Por evaluar':t?'Sin registrar':b.condicion||'Por evaluar'};}
+function datoGrupo(b,t){const c=t?limpioConteo(conteos(t.id)[b.id]):null;return {c,r:t?resultadoToma(t,b.id):b.inv?.r||'Pendiente',u:c?ubic(c):t?'Sin registrar en la toma':ubic(b)||'Sin ubicación',estado:c?c.c||'Por evaluar':t?'Sin registrar':b.condicion||'Por evaluar'};}
 function gruposBienes(L,t){const M=new Map();for(const b of L){const key=grupoId(b);if(!M.has(key))M.set(key,{key,nombre:grupoNombre(key),items:[],ver:0,pend:0,h:0,n:0,ubic:new Map(),est:{}});const g=M.get(key),d=datoGrupo(b,t);g.items.push(b);g.h+=Number(b.valorHist)||0;g.n+=Number(b.valorNeto)||0;if(d.r==='Pendiente')g.pend++;else g.ver++;g.ubic.set(d.u,(g.ubic.get(d.u)||0)+1);g.est[d.estado]=(g.est[d.estado]||0)+1;}return [...M.values()].sort((a,b)=>b.items.length-a.items.length||a.nombre.localeCompare(b.nombre,'es'));}
 const igIds=L=>rangoIds(L.filter(b=>b.idEtq!=null).map(b=>Number(b.idEtq)));
 function fuenteGrupos(t=tomaGrupos()){let L=bienes().filter(b=>ACTIVOS.includes(b.etapa));if(t){const E=new Set(t.esperados||[]);L=L.filter(b=>E.has(b.id));}return L;}
@@ -1000,10 +1068,10 @@ function hereUbic(){ const P=planos().filter(x=>x.marco); if(!P.length||S.hManua
   <div class="fld"><label for="h-am">Ambiente</label><select class="inp" id="h-am" data-hz="am" ${p?'':'disabled'}><option value="">${p?'Elige el ambiente…':'Primero elige el piso'}</option>${A.map(a=>`<option value="${esc(a.id)}" ${a.id===aid?'selected':''}>${esc(etiqueta(a))}</option>`).join('')}${p?`<option value="__otro" ${otro?'selected':''}>Otro (escribir)…</option>`:''}</select></div>${otro?`<div class="fld"><label for="h-amb">Describe la ubicación</label><input class="inp" id="h-amb" data-here="ambiente" data-keep="1" autocomplete="off" value="${esc(H.ambiente)}" placeholder="Ej.: pasillo junto a las aulas"></div>`:''}</div>`; }
 function vToma(id){
   const t={id,...S.data.tomas[id]}; const anual=esAnual(t); const open=t.estado==='abierta'; const C=conteos(id); const p=anual&&S.anCR?avanceCR(t,S.anCR):tomaProg(t);
-  const espSet=new Set(t.esperados||[]);
+  const espSet=new Set(t.esperados||[]),indiceContable=indiceCodigosContables();
   let L=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!espSet.has(k))].map(bid=>({id:bid, b:anual?{id:bid,...S.data.bienes[bid],crToma:crFijo(t,bid),crTomaNombre:nombreCR(crFijo(t,bid)).split(' — ').slice(1).join(' — ')}:{id:bid,...S.data.bienes[bid]}, c:C[bid], fuera:!espSet.has(bid)}));
   if(anual&&S.anCR)L=L.filter(x=>crFijo(t,x.id)===S.anCR);
-  const resOf = x => anual?resultadoAnual(t,x.id,C):x.c?.r || (open?'Pendiente':'No localizado');
+  const resOf = x => resultadoToma(t,x.id,C);
   const L0=L; const CRS=[...new Set(L0.map(x=>crDe(x.b)))].sort((a,b)=>crOrden(a)-crOrden(b)||crNum(a)-crNum(b)||a.localeCompare(b));
   if(S.tCR) L=L.filter(x=>crDe(x.b)===S.tCR);
   if(S.tPrioridad)L=L.filter(x=>String(x.b.prioridadCR)===S.tPrioridad);
@@ -1018,7 +1086,7 @@ function vToma(id){
   const rowOf=x=>{ const b=x.b; const c=x.c; const r=resOf(x);
     const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}<div class="small muted">Registrado por ${esc(nameOf(c.u)||'Registro inicial')}</div>` : '';
     const acts = (!open||(anual&&estadoCR(t,crFijo(t,x.id))!=='abierta')) ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
-    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(anual?nombreCR(crFijo(t,x.id)):b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
+    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(anual?nombreCR(crFijo(t,x.id)):b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${esRegistroDuplicado(b)?chip(REGISTRO_DUPLICADO,'c-warn'):''}${paresCodigo(x.id,b,null,indiceContable).length?chip(CODIGO_COMPARTIDO,'c-warn'):''}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
   const rows=shown.map(rowOf).join('');
   const sob=(t.sobrantes||[]).filter(s=>!anual||!S.anCR||(s.cr||SIN_CR)===S.anCR);
   const tf=[['pendientes','Por verificar'],['verificados','Verificados'],['conciliar','Por conciliar'],['todos','Todos']].map(([k,l])=>`<button data-act="tf" data-tf="${k}" aria-pressed="${S.tf===k}">${l} <span class="num">${cnt[k]}</span></button>`).join('');
@@ -1070,7 +1138,7 @@ function renderDrawer(){
   if(e==='en_uso') A.push(['condicion','Actualizar estado','primary'],['transferir','Transferir / reasignar',''],['mProg','Programar mantenimiento',''],...(puedeSerSistema(b)?[['afSistema','Agregar a un sistema','']]:[]),['solBaja','Solicitar baja','danger']);
   if(e==='mantenimiento') A.push(['mProg','Programar mantenimiento','primary']);
   if(e==='baja_solicitada') A.push(['aprobarBaja','Aprobar baja','primary'],['rechazarBaja','Rechazar baja','']);
-  A.push(['editar','Editar ficha','']);
+  A.push(['editar','Editar ficha','']);if(S.admin)A.push(['registroDuplicado',b.registroDuplicado?.activo?'Desmarcar registro duplicado':'Marcar como registro duplicado','']);
   const prim=A.find(x=>x[2]==='primary'); const rest=A.filter(x=>x!==prim);
   const btn=([k,l,c],cls='')=>`<button class="btn sm ${c} ${cls}" data-act="${k}" data-id="${esc(id)}">${l}</button>`;
   const actions=`<div class="row ro-hide">${prim?btn(prim):''}${rest.length?`<details class="menu right"><summary class="btn sm">Más acciones <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${rest.map(x=>`<button class="mi ${x[2]==='danger'?'danger':''}" role="menuitem" data-act="${x[0]}" data-id="${esc(id)}">${x[1]}</button>`).join('')}</div></details>`:''}</div>`;
@@ -1080,6 +1148,7 @@ function renderDrawer(){
   const sinUb=!b.sede&&!b.piso&&!b.ambiente&&!b.responsable;
   d.innerHTML=`<div class="dr-h"><div class="row between" style="align-items:flex-start;flex-wrap:nowrap"><div style="min-width:0">${b.idEtq!=null?`<div class="idbig mono">ID ${esc(b.idEtq)}</div>`:''}<div class="mono small muted">${esc(b.codigo||'Sin código ADM')}${b.codCont?' · '+esc(b.codCont):''}</div><h2>${esc(b.nombre)}</h2></div><button class="btn ghost dr-close" data-act="closeBien" aria-label="Cerrar ficha">✕</button></div><div class="row" style="gap:6px">${etapaChip(e)} ${ACTIVOS.includes(e)?verifChip(b):''}${b.ejemplo?chip('Ejemplo','nodot'):''}</div>${actions}</div>
   <div class="dr-b">
+    ${avisoFichaContable(id,b)}
     <section><h3 class="sec">Estado</h3>${(()=>{ const v=(x)=>x&&x!=='Por evaluar'?esc(x):'<span class="sinev">Sin evaluar</span>'; return `<dl class="estbox"><div><dt>Conservación</dt><dd>${v(b.condicion)}</dd></div><div><dt>Operatividad</dt><dd>${v(b.oper)}</dd></div><div><dt>Tipo</dt><dd>${b.tipo?`${esc(TIPO[b.tipo]||b.tipo)} (${esc(b.tipo)})`:'<span class="sinev">Sin definir</span>'}</dd></div></dl>`; })()}</section>
     <section><h3 class="sec">Ubicación y custodio</h3>${sinUb?`<p class="hint">Aún no se conoce dónde está ni quién lo usa. Se completa al verificarlo en una toma de inventario.</p>`:''}<dl class="kv">${kv('Sede / edificio',b.sede)}${kv('Piso',b.piso)}${kv('Ambiente',b.ambiente)}${kv('Cuadrante',cuadDe(b))}${kv('Custodio / usuario',b.responsable)}${kv('Área (CR)',b.area)}${kv('Última verificación', b.inv? `${b.inv.r} · ${fmtD(b.inv.f)} · ${b.inv.toma||''}` : 'Sin verificación física')}${b.crs && b.crs.includes(';')?kv('CR asociados',b.crs,false,true):''}</dl>${(()=>{ const r=ambDe(b.amb); return r?`<div class="miniwrap">${planoHtml(r.p,{hl:r.a.id,mini:true})}<div class="small muted">Plano ${esc(planoNombre(r.p))} · ${esc(r.a.nombre)} <button class="btn link small" data-act="plOpen" data-id="${esc(r.p.id)}">Ver plano</button></div></div>`:''; })()}</section>
     ${afSistemasHtml(id)}
@@ -1161,9 +1230,10 @@ const ACT = {
     submit:async v=>{ await bienPatch(id,{etapa:'baja',destinoBaja:v.destino,fechaBaja:v.fecha,docBaja:v.doc}, ev('Baja aprobada', `Destino: ${v.destino}${v.doc?' · '+v.doc:''}${v.det?'. '+v.det:''}`)); toast('Bien dado de baja.'); } }); },
   rechazarBaja(id){ openForm({title:'Rechazar baja', fields:[{k:'mot',l:'Motivo',t:'textarea',req:true,full:true}], ok:'Rechazar baja', submit:async v=>{ const b=S.data.bienes[id]; await bienPatch(id,{etapa:b.etapaPrev==='mantenimiento'?'mantenimiento':'en_uso'}, ev('Baja rechazada', v.mot)); toast('El bien sigue en uso.'); } }); },
   editar(id){ const b=S.data.bienes[id]; const conCod=!['requerimiento','aprobado','recibido','rechazado'].includes(b.etapa);
-    const fields=[F.nombre(b.nombre), F.tipo(b.tipo), ...(conCod?[{k:'codigo',l:'Código ADM / patrimonial',v:b.codigo,req:true}]:[]), {k:'codCont',l:'Código contable',v:b.codCont}, F.categoria(b.categoria), F.marca(b.marca), F.modelo(b.modelo), F.serie(b.serie), {k:'valorHist',l:'Valor histórico (S/)',t:'number',v:b.valorHist}, {k:'valorNeto',l:'Valor neto (S/)',t:'number',v:b.valorNeto}, {k:'obs',l:'Observaciones',t:'textarea',full:true,v:b.obs}];
-    openForm({title:'Editar ficha', note:`${b.idEtq!=null?`ID ${esc(b.idEtq)}: los códigos impresos son inmutables.<br>`:''}Para cambiar ubicación, custodio o estado usa sus acciones, así quedan en el historial. <button type="button" class="btn sm danger" data-act="eliminar" data-id="${esc(id)}" style="margin-left:6px">Eliminar registro</button>`, fields,
-      submit:async v=>{const actual=S.data.bienes[id];if(actual?.idEtq!=null&&(codigoTomaKey(v.codigo||actual.codigo)!==codigoTomaKey(actual.codigo)||codigoTomaKey(v.codCont)!==codigoTomaKey(actual.codCont)))return {error:'Los códigos están vinculados a una etiqueta impresa y no se pueden cambiar.'}; if(conCod && codeTaken(v.codigo,id)) return {error:`El código ${v.codigo} ya está asignado a otro bien.`}; if(conCod) v.codigo=v.codigo.toUpperCase(); const ch=Object.keys(v).filter(k=>(v[k]??'')!==(b[k]??'')); if(!ch.length) return; await bienPatch(id,v, ev('Ficha editada', 'Campos: '+ch.join(', '))); toast('Ficha actualizada.'); } }); if(b.idEtq!=null){$('#ff-codigo')?.setAttribute('readonly','');$('#ff-codCont')?.setAttribute('readonly','');} },
+    const fields=[F.nombre(b.nombre), F.tipo(b.tipo), ...(conCod?[{k:'codigo',l:'Código ADM / patrimonial',v:b.codigo,req:true}]:[]), {k:'codCont',l:'Código contable',v:b.codCont}, ...(S.admin?[{k:'motivoCodigo',l:'Motivo de la corrección del código contable',t:'textarea',full:true,help:'Obligatorio si cambias el código contable.'}]:[]), F.categoria(b.categoria), F.marca(b.marca), F.modelo(b.modelo), F.serie(b.serie), {k:'valorHist',l:'Valor histórico (S/)',t:'number',v:b.valorHist}, {k:'valorNeto',l:'Valor neto (S/)',t:'number',v:b.valorNeto}, {k:'obs',l:'Observaciones',t:'textarea',full:true,v:b.obs}];
+    openForm({title:'Editar ficha', note:`${b.idEtq!=null?`ID ${esc(b.idEtq)}: el ID de etiqueta y el código ADM son inmutables.<br>`:''}El código contable puede corregirlo un administrador con motivo e historial. Para cambiar ubicación, custodio o estado usa sus acciones, así quedan en el historial. <button type="button" class="btn sm danger" data-act="eliminar" data-id="${esc(id)}" style="margin-left:6px">Eliminar registro</button>`, fields,
+      submit:async v=>{const motivo=v.motivoCodigo||'';delete v.motivoCodigo;await guardarEdicionFicha(id,v,motivo,b);toast('Ficha actualizada.');} });$('#ff-codigo')?.setAttribute('readonly','');if(!S.admin)$('#ff-codCont')?.setAttribute('readonly',''); },
+  registroDuplicado(id){exigirAdmin();const b=S.data.bienes[id],activo=!esRegistroDuplicado(b);openForm({title:activo?'Marcar como registro duplicado':'Desmarcar registro duplicado',note:activo?'El bien quedará Por conciliar en las tomas abiertas que lo incluyen. Al cerrar su CR figurará en Hallazgos con propuesta de baja como duplicado. No se da de baja automáticamente. Las tomas y actas ya cerradas se conservan.':'Se retira la propuesta de baja como duplicado. Los conteos quedan Por conciliar para revisar y confirmar su resultado; no se recuperan verificaciones anteriores automáticamente.',fields:[{k:'motivo',l:'Motivo',t:'textarea',req:true,full:true}],ok:activo?'Marcar registro duplicado':'Desmarcar registro duplicado',submit:async v=>{await cambiarRegistroDuplicado(id,activo,v.motivo,structuredClone(b.registroDuplicado||null));toast(activo?'Registro duplicado marcado.':'Registro duplicado desmarcado.');}}); },
 
   eliminar(id){ const b=S.data.bienes[id]; confirmBox('Eliminar registro', `Se eliminará “${bienLabel(b)}” y su historial. Úsalo solo para registros creados por error; para bienes reales usa “Solicitar baja”.`, 'Eliminar', async ()=>{ const ms=mants().filter(m=>m.bienId===id); for(const m of ms) await del('mantenimientos',m.id); await del('bienes',id); closeBien(); toast('Registro eliminado.'); }); },
   mProg(id){ ACT.mNuevo(id); },
@@ -1213,7 +1283,7 @@ const ACT = {
     const head=['Código ADM propuesto','Grupo de activo','Código del activo + descripción','Marca (fuente)','Modelo (fuente)','Serie / placa (fuente)','CR documental (V2)','Resultado de verificación','Cantidad hallada','Sede / edificio','Piso','Ambiente / ubicación física','Custodio / usuario','Conservación','Operatividad','Evidencia / foto','Observaciones de campo','Fecha de toma','Inventariador'];
     const clean=x=>String(x??'').replace(/[\t\r\n]+/g,' ');
     const ids=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!(t.esperados||[]).includes(k))];
-    const lines=[head.join('\t'), ...ids.map(bid=>{ const b=S.data.bienes[bid]||{}; const c=C[bid]; const r=c?.r || (open?'Pendiente':'No localizado');
+    const lines=[head.join('\t'), ...ids.map(bid=>{ const b=S.data.bienes[bid]||{}; const c=C[bid]; const r=resultadoToma(t,bid,C);
       return [b.codigo,b.categoria,b.codCont?`${b.codCont} — ${b.nombre}`:b.nombre,b.marca,b.modelo,b.serie,b.crs||b.area,r,c&&c.r!=='No localizado'?(c.cant??1):'',c?.sede,c?.piso,(c?.ambiente||'')+(cuadDe(c)?` (${cuadDe(c)})`:''),c?.cu,c?.c,c?.o,c?.ev,c?.obs,c?.t?ddmmyyyy(c.t):'',c?nameOf(c.u):''].map(clean).join('\t'); }),
       ...(t.sobrantes||[]).map(s=>['','','SOBRANTE — '+s.d,s.marca,s.modelo,s.serie,'','Sobrante',s.cant||1,'','',s.ub,'',s.c,s.o,'',s.nota,s.t?ddmmyyyy(s.t):'',nameOf(s.u)].map(clean).join('\t'))];
     copyText(lines.join('\n'),`${ids.length} filas copiadas. Pégalas en la hoja «Toma física» o en un Excel nuevo.`); },
@@ -1228,10 +1298,10 @@ const ACT = {
         let parsed; try{ parsed=await parseFile(v.file); }catch(e){ console.warn(e); return {error:'No pude leer el archivo. Verifica que sea un .xlsx o .csv válido.'}; }
         const best=detectSheet(parsed); if(!best) return {error:'No encontré una hoja con columnas de código y descripción.'};
         const items=mapRows(best); const real=bienes().filter(b=>!b.ejemplo); const ids=new Set(real.map(b=>b.id)), cods=new Set(real.map(b=>norm(b.codigo))); const nuevos=items.filter(x=>!ids.has(x.id) && !cods.has(norm(x.d.codigo))); const byCod={}; real.forEach(b=>byCod[norm(b.codigo)]=b); const upd=items.map(x=>{ const b=S.data.bienes[x.id]?{id:x.id,...S.data.bienes[x.id]}:byCod[norm(x.d.codigo)]; if(!b) return null; const f={}; ['valorHist','valorNeto'].forEach(k=>{ if(x.d[k]!=null && x.d[k]!==b[k]) f[k]=x.d[k]; }); return Object.keys(f).length?{id:b.id,f}:null; }).filter(Boolean); const rep=items.length-nuevos.length;
-        S._imp={file:v.file, items:nuevos, upd, sheet:best.name};
+        S._imp={file:v.file, items:nuevos, upd, sheet:best.name};const avisosContables=avisosCodigosImportacion(best.rows.map((row,i)=>({codCont:best.map.codCont!=null?row[best.map.codCont]:'',fila:i+1})));
         const cols=Object.keys(best.map).map(k=>IMP_LABEL[k]).filter(Boolean);
         modalProgress('');
-        $('#mextra').innerHTML=`<div class="impbox"><div><b class="num">${nuevos.length.toLocaleString('es-PE')}</b> bienes nuevos en la hoja «${esc(best.name)}»${rep?` · ${rep} ya existen${upd.length?` (se actualizará el valor histórico y neto de ${upd.length})`:' y se omitirán'}`:''}.</div><div class="small muted">Columnas reconocidas: ${esc(cols.join(', '))}.</div>${nuevos.length?`<div class="small muted">Ejemplo: <span class="mono">${esc(nuevos[0].d.codigo)}</span> · ${esc(nuevos[0].d.nombre)} · ${esc(nuevos[0].d.area||'sin área')}</div>`:''}</div>`;
+        $('#mextra').innerHTML=`<div class="impbox">${avisoCodigosImportacionHtml(avisosContables)}<div><b class="num">${nuevos.length.toLocaleString('es-PE')}</b> bienes nuevos en la hoja «${esc(best.name)}»${rep?` · ${rep} ya existen${upd.length?` (se actualizará el valor histórico y neto de ${upd.length})`:' y se omitirán'}`:''}.</div><div class="small muted">Columnas reconocidas: ${esc(cols.join(', '))}.</div>${nuevos.length?`<div class="small muted">Ejemplo: <span class="mono">${esc(nuevos[0].d.codigo)}</span> · ${esc(nuevos[0].d.nombre)} · ${esc(nuevos[0].d.area||'sin área')}</div>`:''}</div>`;
         $('#mok').textContent = nuevos.length ? `Importar ${nuevos.length.toLocaleString('es-PE')} bienes` : upd.length ? `Actualizar valores de ${upd.length.toLocaleString('es-PE')} bienes` : 'Cerrar';
         if(!nuevos.length && !upd.length){ S._imp=null; formCtx.submit=async()=>{}; }
         return {keep:true}; } }); },
@@ -1655,9 +1725,10 @@ async function cerrarToma(t,{avisados=[]}={}){
   const snap=b=>{ const o={}; CAMPOS_CIERRE.forEach(k=>o[k]=b[k]===undefined?null:b[k]); return o; };
   const evc=(tipo,det,b,c)=>({...ev(tipo,det+(c?.u?' · Conteo de '+nameOf(c.u):'')),toma:t.id,prev:snap(b)});
   const hechos=[];
-  const tasks=ids.filter(bid=>S.data.bienes[bid]).map(bid=>{ const c=C[bid]; const b=S.data.bienes[bid]; const r=c?.r||'No localizado';
+  const tasks=ids.filter(bid=>S.data.bienes[bid]).map(bid=>{ const c=C[bid]||{}; const b=S.data.bienes[bid]; const r=esRegistroDuplicado(b)?'Por conciliar':c?.r||'No localizado';
     if(r==='No localizado'){ if((t.esperados||[]).includes(bid)) res.nol++; return async()=>{ await bienPatch(bid,{inv:{f,toma:t.nombre,tomaId:t.id,r}}, evc('No localizado en inventario', `${t.nombre}${c?.obs?'. '+c.obs:''}. Verificar su paradero o solicitar la baja.`,b,c)); hechos.push(bid); }; }
     if(r==='Encontrado') res.enc++; else res.conc++;
+    if(esRegistroDuplicado(b)){res.conc++;return async()=>{await bienPatch(bid,{inv:{f,toma:t.nombre,tomaId:t.id,r:'Por conciliar'}},evc('Encontrado con diferencias (por conciliar)',`${t.nombre}. ${REGISTRO_DUPLICADO}. ${PROPUESTA_DUPLICADO}: ${b.registroDuplicado.motivo}`,b,c));hechos.push(bid);};}
     const nf={amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion,oper:c.o||b.oper,inv:{f,toma:t.nombre,tomaId:t.id,r}};
     const ch=[]; if(nf.ubicacion!==ubic(b)) ch.push(`ubicación: ${ubic(b)||'por confirmar'} → ${nf.ubicacion||'—'}`); if(nf.responsable!==(b.responsable||'')) ch.push(`custodio: ${b.responsable||'—'} → ${nf.responsable}`); if(nf.condicion!==b.condicion) ch.push(`conservación: ${b.condicion||'—'} → ${nf.condicion}`); if(nf.oper!==b.oper) ch.push(`operatividad: ${b.oper||'—'} → ${nf.oper}`);
     return async()=>{ await bienPatch(bid,nf, evc(r==='Encontrado'?'Verificado en inventario':'Encontrado con diferencias (por conciliar)', `${t.nombre}${ch.length?': '+ch.join('; '):''}${c.obs?'. '+c.obs:''}`,b,c)); hechos.push(bid); }; });
@@ -1858,14 +1929,14 @@ function analizarFormato71(sheets){
   if(!seccion){errores.push(`Fila ${ri+1}: sección no reconocida.`);continue;}
   if(String(r[9]||'').trim())cargo=String(r[9]).trim();
   const h=Number(r[6]),v=Number(r[8]);if(r[6]==null||r[6]===''||r[8]==null||r[8]===''||!Number.isFinite(h)||!Number.isFinite(v)){errores.push(`Fila ${ri+1}: importes no válidos.`);continue;}
-  const x={cod:codigoTomaKey(cod),fila:ri+1,descripcion:activoBase(r[2]),d:{cuenta:String(r[1]).trim(),seccion,cargoResp:cargo,crOriginal:String(r[10]??'').trim(),valorHist:h,valorNeto:v}};
+  const x={cod:codigoContableKey(cod),codigo:cod,fila:ri+1,descripcion:activoBase(r[2]),d:{cuenta:String(r[1]).trim(),seccion,cargoResp:cargo,crOriginal:String(r[10]??'').trim(),valorHist:h,valorNeto:v}};
   filas.push(x);if(!grupos.has(x.cod))grupos.set(x.cod,[]);grupos.get(x.cod).push(x);
   const g=secciones[seccion]||(secciones[seccion]={n:0,h:0,v:0});g.n++;g.h+=h;g.v+=v;
  }
- const registrados=new Map();for(const [id,b]of Object.entries(S.data.bienes)){const c=codigoTomaKey(b.codCont);if(!registrados.has(c))registrados.set(c,[]);registrados.get(c).push({id,b});}
- const cambios=[],duplicados=[];for(const [cod,arr]of grupos){const candidatos=(registrados.get(cod)||[]).sort((a,b)=>a.id.localeCompare(b.id,'es',{numeric:true}));
-  if(candidatos.length!==arr.length){errores.push(`${cod}: ${arr.length} filas en la V1 y ${candidatos.length} en el registro; no se asignarán por suposición.`);continue;}
-  if(arr.length>1){duplicados.push({codigo:cod,filas:arr.map(x=>x.fila),ids:candidatos.map(x=>x.id)});if(arr.some(x=>x.descripcion!==arr[0].descripcion||R3_FIELDS.filter(k=>k!=='dupRegistro').some(k=>!igual71(k,x.d[k],arr[0].d[k])))) {errores.push(`${cod}: las filas duplicadas difieren. Revisa su correspondencia antes de importar.`);continue;}}
+ const registrados=new Map();for(const [id,b]of Object.entries(S.data.bienes)){const c=codigoContableKey(b.codCont);if(!registrados.has(c))registrados.set(c,[]);registrados.get(c).push({id,b});}
+ const cambios=[],duplicados=[],correspondencia=[];for(const [cod,arr]of grupos){const candidatos=(registrados.get(cod)||[]).sort((a,b)=>a.id.localeCompare(b.id,'es',{numeric:true}));
+  if(candidatos.length!==arr.length){correspondencia.push(`${arr[0].codigo}: ${arr.length} filas en el archivo y ${candidatos.length} bienes en la base; estas fichas no se actualizarán hasta revisar su correspondencia. El resto puede importarse.`);continue;}
+  if(arr.length>1){duplicados.push({codigo:cod,filas:arr.map(x=>x.fila),ids:candidatos.map(x=>x.id)});if(arr.some(x=>x.descripcion!==arr[0].descripcion||R3_FIELDS.filter(k=>k!=='dupRegistro').some(k=>!igual71(k,x.d[k],arr[0].d[k])))) {correspondencia.push(`${arr[0].codigo}: las filas difieren. No se actualizarán estas fichas por suposición; revisa su correspondencia. El resto puede importarse.`);continue;}}
   arr.forEach((x,i)=>{const {id,b}=candidatos[i];const d={...x.d,dupRegistro:arr.length>1};if(R3_FIELDS.some(k=>!igual71(k,b[k],d[k])))cambios.push({id,cod,d,fila:x.fila});});
  }
  const controles=Object.entries(CONTROL71).map(([seccion,c])=>{const a=secciones[seccion]||{n:0,h:0,v:0};return {seccion,...a,ok:a.n===c.n&&Math.round(a.h*100)===Math.round(c.h*100)&&Math.round(a.v*100)===Math.round(c.v*100)};});
@@ -1877,12 +1948,12 @@ function analizarFormato71(sheets){
  if(ruc!=='20125899723')errores.push('El RUC no corresponde a la Sociedad Bíblica Peruana.');
  if(activoBase(periodo)==='AGOSTO 2026'&&controles.some(c=>!c.ok))errores.push('Los totales de agosto de 2026 no coinciden con los controles de la especificación.');
  const hallazgos=[`${filas.filter(x=>!x.d.cargoResp).length} bienes sin cargo en su sección`,`${filas.filter(x=>x.d.crOriginal.includes('/')).length} bienes con CR original múltiple`,...filas.filter(x=>x.d.crOriginal&&!/^\d+(?:\/\d+)*$/.test(x.d.crOriginal)).map(x=>`Fila ${x.fila}: CR original «${x.d.crOriginal}» se conserva como texto`)];
- return {errores,cambios,duplicados,controles,total,periodo,ruc,razon,hallazgos};
+ return {errores,cambios,duplicados,controles,total,periodo,ruc,razon,hallazgos,correspondencia,avisosContables:avisosCodigosImportacion(filas.map(x=>({codCont:x.codigo,fila:x.fila})))};
 }
 async function ejecutarFormato71(r,archivo){
   exigirAdmin();
  if(r.errores.length)throw new Error('Corrige los errores antes de aplicar.');
- for(const x of r.cambios)if(codigoTomaKey(S.data.bienes[x.id]?.codCont)!==x.cod)throw new Error('El registro cambió; vuelve a analizar el archivo.');
+ for(const x of r.cambios)if(codigoContableKey(S.data.bienes[x.id]?.codCont)!==x.cod)throw new Error('El registro cambió; vuelve a analizar el archivo.');
  const prev=r.cambios.map(x=>({id:x.id,prev:Object.fromEntries(R3_FIELDS.map(k=>[k,S.data.bienes[x.id][k]??null])),nuevo:x.d}));
  const key='toma-r3-'+uid();await put('config',key,{tipo:'Carga Formato 7.1',archivo,fecha:nowIso(),prev,configPrev:S.data.config.formato71||null,estado:'en curso'});
  const resultado=await runMany(r.cambios.map(x=>()=>patch('bienes',x.id,conOrigen(x.d,'importación',archivo,S.data.bienes[x.id]))),4,(d,n)=>modalProgress(`Actualizando Formato 7.1: ${d} de ${n}…`));
@@ -1893,7 +1964,7 @@ Object.assign(ACT,{
  tFormato71(){openForm({title:'Cargar Formato 7.1 (datos contables)',note:'Completa cuenta, sección, cargo y CR original. Conserva la precisión de los valores de la V1; los totales se redondean al mostrar. No borra registros ni modifica etiquetas.',fields:[{k:'archivo',l:'Formato 7.1 (.xls o .xlsx)',t:'file',accept:'.xls,.xlsx',req:true,full:true}],ok:'Ver vista previa',submit:async v=>{
   let r;try{r=analizarFormato71(await parseFile(v.archivo));}catch(e){return {error:e.message};}
   const tabla=`<div class="tbl-wrap"><table class="stk"><thead><tr><th>Sección</th><th>Bienes</th><th>Histórico</th><th>Neto</th><th>Control §4.1</th></tr></thead><tbody>${r.controles.map(c=>`<tr><td data-l="Sección">${esc(c.seccion)}</td><td data-l="Bienes">${c.n}</td><td data-l="Histórico">${money(c.h)}</td><td data-l="Neto">${money(c.v)}</td><td data-l="Control §4.1">${c.ok?'Cuadra':'Difiere'}</td></tr>`).join('')}</tbody></table></div>`;
-  openForm({title:'Vista previa del Formato 7.1',note:`${esc(r.periodo)} · RUC ${esc(r.ruc)}<br><b>${r.total.n}</b> bienes · ${money(r.total.h)} histórico · ${money(r.total.v)} neto.<br><b>${r.cambios.length}</b> fichas por actualizar · <b>${r.duplicados.length}</b> códigos duplicados (se conservan todas sus filas).${tabla}<p>${r.hallazgos.map(esc).join("<br>")}</p>${r.errores.length?`<ul>${r.errores.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}<p>Se guardará una copia de los campos anteriores antes de aplicar.</p>`,fields:r.errores.length?[]:[{k:'conf',l:'Escribe IMPORTAR para aplicar',req:true,full:true}],ok:r.errores.length?'Volver':'Cargar datos contables',submit:async w=>{
+  openForm({title:'Vista previa del Formato 7.1',note:`${esc(r.periodo)} · RUC ${esc(r.ruc)}<br><b>${r.total.n}</b> bienes · ${money(r.total.h)} histórico · ${money(r.total.v)} neto.<br><b>${r.cambios.length}</b> fichas por actualizar · <b>${r.duplicados.length}</b> códigos contables compartidos en el archivo (se conservan sus filas).${avisoCodigosImportacionHtml(r.avisosContables)}${r.correspondencia.length?`<p>Correspondencia pendiente (aviso, no bloquea el resto):</p><ul>${r.correspondencia.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}${tabla}<p>${r.hallazgos.map(esc).join("<br>")}</p>${r.errores.length?`<ul>${r.errores.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}<p>Se guardará una copia de los campos anteriores antes de aplicar.</p>`,fields:r.errores.length?[]:[{k:'conf',l:'Escribe IMPORTAR para aplicar',req:true,full:true}],ok:r.errores.length?'Volver':'Cargar datos contables',submit:async w=>{
    if(r.errores.length){setTimeout(()=>ACT.tFormato71(),0);return;}if(w.conf!=='IMPORTAR')return {error:'Escribe IMPORTAR para confirmar.'};
    const res=await ejecutarFormato71(r,v.archivo.name);if(res.fail)return {error:`${res.fail} fichas no se guardaron. Conservamos el estado anterior; reimporta para completar.`};toast(`${res.done} fichas con datos contables actualizados.`);render();
   }});return {keep:true};
@@ -1925,7 +1996,7 @@ function registrarIDsModal(txt='',estado=S.here.c,oper=S.here.o,permitidos=null)
 }
 function mismoLugar(a,b){return ['sede','piso','ambiente','amb','cuad'].every(k=>String(a[k]||'')===String(b[k]||''));}
 async function scan(code){exigirEscritura();const crudo=String(code||'').trim();if(!crudo)return false;const t=S.data.tomas[S.tomaSel];if(!t||t.estado!=='abierta')return false;
- const limpio=crudo.replace(/\s+/g,'');const B=bienes();let b;if(/^\d+$/.test(limpio)){const n=Number(limpio);if(Number.isSafeInteger(n))b=indiceEtiqueta().get(n);}else{const k=codigoTomaKey(crudo);const encontrados=B.filter(x=>codigoTomaKey(x.codigo)===k||codigoTomaKey(x.codCont)===k);if(encontrados.length>1){toast('Código contable duplicado. Usa el ID de etiqueta o código ADM.');return false;}b=encontrados[0];}
+ const limpio=crudo.replace(/\s+/g,'');const B=bienes();let b;if(/^\d+$/.test(limpio)){const n=Number(limpio);if(Number.isSafeInteger(n))b=indiceEtiqueta().get(n);}else{const k=codigoTomaKey(crudo);const encontrados=B.filter(x=>codigoTomaKey(x.codigo)===k||codigoContableKey(x.codCont)===codigoContableKey(crudo));if(encontrados.length>1){toast('Código contable compartido. Usa el ID de etiqueta o código ADM.');return false;}b=encontrados[0];}
  if(!b){S._pendSob=crudo;openForm({title:'Código desconocido',note:`Lectura: <b>${esc(crudo)}</b>. No corresponde a un bien del registro.`,fields:[],ok:'Registrar sobrante',submit:async()=>{setTimeout(()=>ACT.tSobrante(),0);}});return false;}
  if(!S.here.piso&&!S.here.ambiente){toast('Elige primero la ubicación en «Contando en».');return false;}
  const d=await marcar(b.id,true);if(!d)return false;toast(`ID ${b.idEtq||b.codigo}: ${b.nombre}, encontrado.`);return true;
@@ -2040,14 +2111,14 @@ function claveUbicacionV3(f){return JSON.stringify([nrm(f.edif),pisoKey(f.piso),
 function ubicacionV3(f,r){const k=claveUbicacionV3(f),id=r.mapeos?.[k]||S.data.config.ubicacionesV3?.mapa?.[k];if(id&&id!=='__texto'){const [pid,aid]=id.split('/'),p=S.data.planos[pid],a=p?.ambientes?.find(a=>a.id===aid);if(a){const pt=[+(a.x+a.w/2).toFixed(2),+(a.y+a.h/2).toFixed(2)];return {sede:zonaSede(a.zona||p.zona),piso:String(p.nombre||p.piso),ambiente:a.nombre,amb:id,cuad:cuadOf(...pt),pt,okPiso:true,okAmb:true};}}return ubicar(f);}
 async function analizarImport(file,t){
  const sheets=await parseFile(file),cabecera=buscarCabeceraV3(sheets);if(!cabecera)throw new Error('No encontré una hoja ETIQUETA con los títulos de la V3.');const {sh}=cabecera;
- const r={cabecera,tipo:'v3',hojas:['ETIQUETA'],errores:[],desconocidos:[],avisos:new Set(),filas:[],cantidades:[],choices:{},reg:new Map(),all:new Map(),etiquetas:[],mapeos:{},defaults:{conservacion:'Bueno',custodios:{}},archivo:file.name,toma:t.id};
- const B=S.data.bienes,C=conteos(t.id),porID=indiceEtiqueta(),porCod=new Map(),propuestos=new Map();for(const [id,b]of Object.entries(B)){const k=codigoTomaKey(b.codCont);if(!porCod.has(k))porCod.set(k,[]);porCod.get(k).push(id);}
+ const r={cabecera,tipo:'v3',hojas:['ETIQUETA'],errores:[],desconocidos:[],avisos:new Set(),filas:[],cantidades:[],choices:{},reg:new Map(),all:new Map(),etiquetas:[],mapeos:{},defaults:{conservacion:'Bueno',custodios:{}},archivo:file.name,toma:t.id,codigosAnteriores:[]};
+ const B=S.data.bienes,C=conteos(t.id),porID=indiceEtiqueta(),porCod=new Map(),propuestos=new Map();for(const [id,b]of Object.entries(B))for(const k of codigosContablesBusqueda(b)){if(!porCod.has(k))porCod.set(k,[]);porCod.get(k).push(id);}
  for(let ri=cabecera.ri+1;ri<sh.rows.length;ri++){
   const raw=sh.rows[ri]||[],a=filaV3(raw,cabecera);if(a.every(v=>v==null||v==='')||esFilaTitulosV3(a))continue;
-  const adm=String(a[9]??'').trim(),cod=codigoTomaKey(a[1]),etq=a[0],n=Number(etq);let candidatos=null,desconocido=false;
+  const adm=String(a[9]??'').trim(),cod=codigoContableKey(a[1]),etq=a[0],n=Number(etq);let candidatos=null,desconocido=false;
   for(const lista of [adm?(B[adm]?[adm]:[]):null,cod?(porCod.get(cod)||[]):null,etq!==''&&etq!=null&&porID.has(n)?[porID.get(n).id]:null]){if(lista===null)continue;if(!lista.length){desconocido=true;break;}candidatos=candidatos===null?lista:candidatos.filter(id=>lista.includes(id));}
   if(desconocido||!candidatos){r.desconocidos.push({ri:ri+1,txt:[etq,cod,adm].filter(Boolean).join(' · ')});continue;}
-  if(candidatos.length!==1){r.errores.push(`Fila ${ri+1}: los códigos no coinciden o son ambiguos.`);continue;}const id=candidatos[0],b=B[id];
+  if(candidatos.length!==1){r.errores.push(`Fila ${ri+1}: los códigos no coinciden o son ambiguos.`);continue;}const id=candidatos[0],b=B[id];if(cod&&cod!==codigoContableKey(b.codCont))r.codigosAnteriores.push({fila:ri+1,id,actual:b.codCont});
   if(!(t.esperados||[]).includes(id)){r.errores.push(`Fila ${ri+1}: ${id} no pertenece al alcance de esta toma.`);continue;}
   if(r.all.has(id)){r.errores.push(`Fila ${ri+1}: ${id} aparece dos veces.`);continue;}
   if(etq!==''&&etq!=null){if(!Number.isSafeInteger(n)||n<1)r.errores.push(`Fila ${ri+1}: ID no válido.`);else if(b.idEtq!=null&&Number(b.idEtq)!==n)r.errores.push(`Fila ${ri+1}: el ID de ${id} es inmutable (${b.idEtq}).`);else if(propuestos.has(n)&&propuestos.get(n)!==id)r.errores.push(`Fila ${ri+1}: ID ${n} repetido.`);else {propuestos.set(n,id);if(b.idEtq==null)r.etiquetas.push({id,n});}}
@@ -2058,7 +2129,7 @@ async function analizarImport(file,t){
  }
  if(r.etiquetas.length&&!S.admin)r.errores.push('La hoja asigna etiquetas nuevas. Un administrador debe revisar y aplicar esta importación.');
  for(const f of r.cantidades){const key=grupoId({id:f.id,...B[f.id]}),nID=Number(B[f.id].idEtq??r.etiquetas.find(x=>x.id===f.id)?.n);f.siguientes=[...r.all.values()].filter(x=>!x.lleno&&!C[x.id]&&Number(B[x.id].idEtq??r.etiquetas.find(e=>e.id===x.id)?.n)>nID&&grupoId({id:x.id,...B[x.id]})===key).sort((a,b)=>(B[a.id].idEtq??r.etiquetas.find(e=>e.id===a.id)?.n)-(B[b.id].idEtq??r.etiquetas.find(e=>e.id===b.id)?.n)).slice(0,f.n-1).map(x=>x.id);f.apto=f.siguientes.length===f.n-1;}
- actualizarV3(r);return r;
+ r.avisosContables=avisosCodigosImportacion(sh.rows.slice(cabecera.ri+1).flatMap((raw,i)=>{const a=filaV3(raw||[],cabecera);return esFilaTitulosV3(a)?[]:[{codCont:a[1],fila:cabecera.ri+i+2}];}));actualizarV3(r);return r;
 }
 function conteoDesdeV3(f,r){const e=estImp(f.estado),nl=e.nl||(f.cant!==''&&f.cant!=null&&Number(f.cant)===0),u=ubicacionV3(f,r);if(!u.amb&&f.ubic)r.avisos.add(`Ubicación «${f.ubic}» requiere vinculación o reconocimiento como texto.`);
  const base={u:S.me||null,t:fechaIso(f.fecha)||nowIso(),imp:{archivo:r.archivo,hoja:'ETIQUETA',fila:f.ri},origen:'importación'};
@@ -2070,15 +2141,15 @@ async function asignarEtiquetasV3(r){if(!r.etiquetas.length)return;exigirAdmin()
  for(let i=0;i<r.etiquetas.length;i+=100){const L=r.etiquetas.slice(i,i+100),audit='v3-etiquetas-'+uid();await transaccionCR([...L.map(x=>'bienes/'+x.id),'config/etiquetasSecuencia','config/'+audit],docs=>{exigirAdmin();if(firmaDatos(docs[L.length])!==firmaDatos(secuenciaEsperada))throw new Error('Otra operación modificó las etiquetas. Revisa otra vez la hoja.');const seq=docs[L.length]||{},writes=[],prev=[];L.forEach((x,j)=>{const b=docs[j];if(!b)throw new Error('Falta una ficha.');if(b.idEtq!=null&&Number(b.idEtq)!==x.n)throw new Error('Una etiqueta cambió. Revisa de nuevo.');if(b.idEtq==null){writes.push(['bienes/'+x.id,{...b,idEtq:x.n,origenDatos:{...b.origenDatos,idEtq:{tipo:'importación',archivo:r.archivo,fecha:nowIso(),u:S.me}}}]);prev.push({id:x.id,idAnterior:null,idNuevo:x.n});}});if(writes.length)writes.push(['config/etiquetasSecuencia',{...seq,revisionEtiquetas:(seq.revisionEtiquetas||0)+1,ultimo:Math.max(Number(seq.ultimo)||0,...L.map(x=>x.n))}],['config/'+audit,{tipo:'Etiquetas asignadas al subir V3',archivo:r.archivo,fecha:nowIso(),u:S.me,prev}]);return {writes};});secuenciaEsperada=S.data.config.etiquetasSecuencia||null;}
 }
 
-function actualizarV3(r){r.solapado=false;const reg=new Map();r.avisos=new Set();for(const f of r.filas)reg.set(f.id,{d:conteoDesdeV3(f,r),f});
+function actualizarV3(r){r.solapado=false;const reg=new Map();r.avisos=new Set();for(const f of r.filas)reg.set(f.id,{d:conteoDuplicado(conteoDesdeV3(f,r),S.data.bienes[f.id]),f});
  for(const f of r.cantidades){const modo=r.choices[f.ri]||'omitir';if(modo==='omitir')continue;if(modo==='expandir'&&!f.apto)continue;
   reg.set(f.id,{d:conteoDesdeV3({...f,cant:1},r),f});if(modo==='expandir')for(const id of f.siguientes){if(reg.has(id)){r.solapado=true;r.avisos.add(`La expansión de la fila ${f.ri} coincide con otra selección; revisa los rangos.`);continue;}const destino=r.all.get(id);reg.set(id,{d:conteoDesdeV3({...f,cant:1,obs:`Aplicación de CANTIDAD ${f.n} confirmada desde fila ${f.ri}`},r),f:destino});}
  }
- r.reg=reg;const C=conteos(r.toma);r.yaReg=[...reg.keys()].filter(id=>C[id]).length;r.enc=[...reg.values()].filter(x=>x.d.r==='Encontrado').length;r.nol=[...reg.values()].filter(x=>x.d.r==='No localizado').length;r.conc=[...reg.values()].filter(x=>x.d.r==='Por conciliar').length;r.pend=[...r.all.keys()].filter(id=>!reg.has(id)).length;
+ for(const [id,x]of reg)x.d=conteoDuplicado(x.d,S.data.bienes[id]);r.reg=reg;const C=conteos(r.toma);r.yaReg=[...reg.keys()].filter(id=>C[id]).length;r.enc=[...reg.values()].filter(x=>x.d.r==='Encontrado').length;r.nol=[...reg.values()].filter(x=>x.d.r==='No localizado').length;r.conc=[...reg.values()].filter(x=>x.d.r==='Por conciliar').length;r.pend=[...r.all.keys()].filter(id=>!reg.has(id)).length;
  r.porActivo=new Map();for(const id of r.all.keys()){const k=grupoNombre(grupoId({id,...S.data.bienes[id]}));const g=r.porActivo.get(k)||{total:0,enc:0,nol:0,pend:0};g.total++;const c=reg.get(id);if(!c)g.pend++;else if(c.d.r==='Encontrado')g.enc++;else if(c.d.r==='No localizado')g.nol++;r.porActivo.set(k,g);}return r;
 }
 function previewV3(){S._imp.anteriores??=structuredClone(conteos(S._imp.r.toma));const {r,file}=S._imp;actualizarV3(r);const m=$('#modal');m.classList.add('wide');const prevOver=$('#imp-over')?.checked;
- m.innerHTML=`<form data-form="impok"><div class="m-h"><h2>Vista previa de la V3</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b">${avisoCabeceraV3(r.cabecera)}${opcionesImportacionV3(r)}<p>${esc(file)} · ${r.enc} encontrados · ${r.nol} no localizados · ${r.conc} por conciliar · ${r.pend} pendientes en este archivo.</p><p>Los registros existentes se conservan salvo que marques reemplazarlos. Las filas sin datos no crean conteos.</p>
+ m.innerHTML=`<form data-form="impok"><div class="m-h"><h2>Vista previa de la V3</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b">${avisoCabeceraV3(r.cabecera)}${avisoCodigosImportacionHtml(r.avisosContables)}${r.codigosAnteriores?.length?`<div class="m-note"><b>Códigos contables anteriores a una corrección</b><p>Se reconocen por el ID de etiqueta y el código ADM. Se conserva el código actual de la ficha.</p><ul>${r.codigosAnteriores.map(x=>`<li>Fila ${x.fila} · ${esc(x.id)} · actual: ${esc(x.actual)}</li>`).join('')}</ul></div>`:''}${opcionesImportacionV3(r)}<p>${esc(file)} · ${r.enc} encontrados · ${r.nol} no localizados · ${r.conc} por conciliar · ${r.pend} pendientes en este archivo.</p><p>Los registros existentes se conservan salvo que marques reemplazarlos. Las filas sin datos no crean conteos.</p>
  ${r.cantidades.map(f=>`<div class="m-note"><b>Fila ${f.ri}: CANTIDAD ${f.n}</b> para ${esc(grupoNombre(grupoId({id:f.id,...S.data.bienes[f.id]})))}.<br>${f.apto?`Se pueden registrar los IDs ${esc([f.id,...f.siguientes].map(id=>S.data.bienes[id].idEtq).join(', '))}.`:'No hay suficientes IDs posteriores del grupo sin datos.'}<label>Qué aplicar<select class="inp" data-v3-cantidad="${f.ri}"><option value="omitir" ${!r.choices[f.ri]||r.choices[f.ri]==='omitir'?'selected':''}>Omitir esta cantidad hasta revisarla</option><option value="solo" ${r.choices[f.ri]==='solo'?'selected':''}>Registrar solo esta fila como 1 bien</option>${f.apto?`<option value="expandir" ${r.choices[f.ri]==='expandir'?'selected':''}>Aplicar a estos ${f.n} IDs del mismo grupo</option>`:''}</select></label></div>`).join('')}
  ${r.yaReg?`<label class="chk"><input type="checkbox" id="imp-over" ${prevOver?'checked':''}> Reemplazar ${r.yaReg} conteos existentes (se guardará copia anterior)</label>`:''}
  ${r.errores.length?`<p class="err">Carga bloqueada:</p><ul>${r.errores.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
@@ -2139,7 +2210,7 @@ function etiquetasDeToma(t){const L=(t.esperados||[]).map(id=>({id,...S.data.bie
 function alcanceV3(t,cr=''){return {...t,esperados:(t.esperados||[]).filter(id=>!cr||(esAnual(t)?crFijo(t,id):crActual(S.data.bienes[id]||{}))===cr)};}
 async function plantillaToma(t,cr=''){
  t=alcanceV3(t,cr);const L=etiquetasDeToma(t),C=conteos(t.id),headers=[...V3_HEADERS,'CONSERVACIÓN','CUSTODIO','OPERATIVIDAD','OBSERVACIONES','RESULTADO'],R=Array.from({length:13},()=>[]);R.push(headers.map(v=>({v,s:'h'})));
- for(const b of L){const c=limpioConteo(C[b.id]),crb=esAnual(t)?crFijo(t,b.id):crActual(b);R.push([Number(b.idEtq),b.codCont||'',grupoNombre(grupoId(b)),c?.t?fechaCeldaToma(c.t):'',c?.sede||'',c?.piso||'',c?.ambiente||'',c?(c.r==='No localizado'?0:c.cant??1):'',c?(c.r==='No localizado'?'No localizado':c.c||''):'',b.codigo||b.id,crb===SIN_CR?'':Number(crb),crb===SIN_CR?'':nombreCR(crb).split(' — ').slice(1).join(' — '),b.prioridadCR??'',c?.c||'',c?.cu||'',c?.o||'',c?.obs||'',c?.r||'']);}
+ for(const b of L){const raw=limpioConteo(C[b.id]),c=duplicadoEnToma(t,b.id)?{...(raw||{}),r:'Por conciliar',obs:[raw?.obs,REGISTRO_DUPLICADO+': '+b.registroDuplicado.motivo].filter(Boolean).join(' · ')}:raw,crb=esAnual(t)?crFijo(t,b.id):crActual(b);R.push([Number(b.idEtq),b.codCont||'',grupoNombre(grupoId(b)),c?.t?fechaCeldaToma(c.t):'',c?.sede||'',c?.piso||'',c?.ambiente||'',c?(c.r==='No localizado'?0:c.cant??1):'',c?(c.r==='No localizado'?'No localizado':c.c||''):'',b.codigo||b.id,crb===SIN_CR?'':Number(crb),crb===SIN_CR?'':nombreCR(crb).split(' — ').slice(1).join(' — '),b.prioridadCR??'',c?.c||'',c?.cu||'',c?.o||'',c?.obs||'',c?.r||'']);}
  const n=R.length,faltan=sinEtiquetaToma(t),hojas=[{name:'ETIQUETA',sel:true,rows:R,cols:[8,21,55,22,20,14,35,13,18,24,15,55,15,20,28,22,55,22],table:{name:'RelacionesCRAFV3',ref:`A14:R${n}`,headers},freeze:14,titles:'14',portrait:true,scale:90,center:true,printArea:`A14:I${n}`,duplicate:`B15:B${n}`,dv:[{type:'whole',ref:`H15:H${n}`,min:0,max:1,err:'Cada fila es un bien: escribe 0 o 1.'}],foot:t.nombre}];
  if(faltan.length)hojas.push({name:'Sin ID',rows:[['PLANTILLA INCOMPLETA: BIENES EXCLUIDOS POR NO TENER ID'],['Código ADM','Descripción','CR'],...faltan.map(b=>[b.codigo||b.id,b.nombre||'Ficha no disponible',esAnual(t)?crFijo(t,b.id):crActual(b)])],cols:[28,70,24],freeze:2});return xlsxBlob(hojas);
 }
@@ -2177,8 +2248,9 @@ function tablasNormalizadas(datos=S.data,usuarios=S.usuarios){
  const nombre=u=>!u?'':U[u]?.nombre||S.names[u]||(u===S.me?S.myName:'')||U[u]?.email||'Usuario anterior o sin nombre disponible';
  const add=(name,heads,rows)=>{sheets.push({name,rows:[heads.map(v=>({v,s:'h'})),...rows],cols:heads.map(h=>/Descripcion|Observacion|Detalle|Componentes/.test(h)?55:24),filter:`A1:${XL.col(heads.length-1)}${rows.length+1}`,freeze:1,sel:name==='Bienes'});meta.push({name,heads,n:rows.length});};
  const B=entries(D.bienes),T=entries(D.tomas),C=Object.entries(D).filter(([p])=>/^tomas\/[^/]+\/conteos$/.test(p));
+ const indiceContable=indiceCodigosContables(B.map(([id,b])=>({id,...b})));
  const rangos=new Set();for(const [id,l]of entries(cfg))if(id.startsWith('toma-r5-'))for(const x of l.prev||[])rangos.add(`${l.toma}/${x.id}/${x.nuevo?.t||''}`);
- add('Bienes',['BienID','IDEtiqueta','CodigoContable','Descripcion','GrupoDeBienes','Tipo','Categoria','Seccion','Cuenta','Marca','Modelo','Serie','CR','CRNombre','PrioridadCR','CROriginal','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Custodio','Conservacion','Operatividad','Etapa','FechaAdquisicion','ValorHistorico','ValorNeto','UltimaVerificacion','ResultadoUltimaToma','DupRegistro','Creado','Actualizado'],B.map(([id,b])=>[id,num(b.idEtq),txt(b.codCont),b.nombre||'',grupoNombre(grupoId({id,...b})),b.tipo||'',b.categoria||'',b.seccion||'',txt(b.cuenta),b.marca||'',b.modelo||'',b.serie||'',txt(b.crToma),b.crTomaNombre||cfg.crPrioridad?.crs?.[b.crToma]?.nombre||'',num(b.prioridadCR),txt(b.crOriginal),b.sede||'',txt(b.piso),b.ambiente||'',b.amb||'',b.cuad||'',b.responsable||'',b.condicion||'',b.oper||'',b.etapa||'',fechaNormalizada(b.fechaAdq),cash(b.valorHist),cash(b.valorNeto),fechaNormalizada(b.inv?.f),b.inv?.r||'',b.dupRegistro?'Sí':'No',fechaNormalizada(b.creado),fechaNormalizada(b.act||b._m)]));
+ add('Bienes',['BienID','IDEtiqueta','CodigoContable','Descripcion','GrupoDeBienes','Tipo','Categoria','Seccion','Cuenta','Marca','Modelo','Serie','CR','CRNombre','PrioridadCR','CROriginal','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Custodio','Conservacion','Operatividad','Etapa','FechaAdquisicion','ValorHistorico','ValorNeto','UltimaVerificacion','ResultadoUltimaToma','Código contable compartido en la fuente','Creado','Actualizado','Código contable compartido','Registro duplicado','Motivo de registro duplicado','Propuesta'],B.map(([id,b])=>[id,num(b.idEtq),txt(b.codCont),b.nombre||'',grupoNombre(grupoId({id,...b})),b.tipo||'',b.categoria||'',b.seccion||'',txt(b.cuenta),b.marca||'',b.modelo||'',b.serie||'',txt(b.crToma),b.crTomaNombre||cfg.crPrioridad?.crs?.[b.crToma]?.nombre||'',num(b.prioridadCR),txt(b.crOriginal),b.sede||'',txt(b.piso),b.ambiente||'',b.amb||'',b.cuad||'',b.responsable||'',b.condicion||'',b.oper||'',b.etapa||'',fechaNormalizada(b.fechaAdq),cash(b.valorHist),cash(b.valorNeto),fechaNormalizada(b.inv?.f),b.inv?.r||'',b.dupRegistro?'Sí':'No',fechaNormalizada(b.creado),fechaNormalizada(b.act||b._m),paresCodigo(id,b,null,indiceContable).length?'Sí':'No',esRegistroDuplicado(b)?'Sí':'No',esRegistroDuplicado(b)?b.registroDuplicado.motivo:'',esRegistroDuplicado(b)?PROPUESTA_DUPLICADO:'']));
  add('Historial',['BienID','Fecha','Evento','Detalle','Usuario','TomaID'],B.flatMap(([id,b])=>(b.hist||[]).map(h=>[id,fechaNormalizada(h.t),h.tipo||'',h.det||'',nombre(h.u),h.toma||''])));
  add('Tomas',['TomaID','Nombre','Estado','Alcance','Inicio','Cierre','Esperados','Encontrados','NoLocalizados','PorConciliar','Sobrantes'],T.map(([id,t])=>{const c=D[`tomas/${id}/conteos`]||{},ids=new Set(t.esperados||[]),n=r=>[...ids].filter(bid=>c[bid]?.r===r||(r==='No localizado'&&(t.estado==='cerrada'||(esAnual(t)&&estadoCR(t,crFijo(t,bid))==='cerrada'))&&!c[bid])).length;return [id,t.nombre||'',t.estado||'',t.alcance||'',fechaNormalizada(t.creado),fechaNormalizada(t.cierre),ids.size,n('Encontrado'),n('No localizado'),n('Por conciliar'),(t.sobrantes||[]).reduce((n,s)=>n+(Number(s.cant)||1),0)];}));
  add('Conteos',['TomaID','BienID','IDEtiqueta','Resultado','Sede','Piso','Ambiente','AmbienteID','Cuadrante','Conservacion','Operatividad','Cantidad','Observacion','Usuario','Fecha','Origen','ArchivoOrigen'],C.flatMap(([p,c])=>entries(c).map(([bid,v])=>{const tid=p.split('/')[1];return [tid,bid,num(D.bienes?.[bid]?.idEtq),v.r||'',v.sede||'',txt(v.piso),v.ambiente||'',v.amb||'',v.cuad||'',v.c||'',v.o||'',num(v.cant),v.obs||'',nombre(v.u),fechaNormalizada(v.t),v.imp?'importación':v.origen|| (rangos.has(`${tid}/${bid}/${v.t||''}`)?'rango':'manual (origen no conservado)'),v.imp?(typeof v.imp==='object'?JSON.stringify(v.imp):v.imp):''];})));
@@ -2232,8 +2304,8 @@ const edifCorto=s=>{const p=String(s||'').split(' · ')[1];return p?zonaCorta(p)
 function crReporte(b){if(b.crToma)return String(b.crToma);if(/^\d+$/.test(String(b.crOriginal||'').trim()))return String(b.crOriginal).trim();const viejo=String(b.crs||'');return !/[\/;]/.test(viejo)?(viejo.match(/^\d+/)?.[0]||'Sin CR asignado'):'Sin CR asignado';}
 async function consolidadoToma(t){
  const meta=S.data.config.formato71;if(!meta)throw new Error('Carga primero los datos contables con el Formato 7.1 para validar el consolidado.');
- const C=conteos(t.id),esperados=new Set(t.esperados||[]),abierta=t.estado==='abierta',estado=abierta?'PRELIMINAR':'DEFINITIVO';
- const L=bienes().map(b=>{const c=C[b.id];return {b,c,cr:esAnual(t)&&esperados.has(b.id)?crFijo(t,b.id):crReporte(b),r:c?.r||(esperados.has(b.id)?(esAnual(t)?resultadoAnual(t,b.id,C):abierta?'Pendiente':'No localizado'):'Fuera del alcance'),alcance:esperados.has(b.id)};}).sort((a,b)=>(a.b.seccion||a.b.categoria||'Sin sección').localeCompare(b.b.seccion||b.b.categoria||'Sin sección','es')||codigoTomaKey(a.b.codCont).localeCompare(codigoTomaKey(b.b.codCont),'es',{numeric:true})||a.b.id.localeCompare(b.b.id));
+ const indiceContable=indiceCodigosContables(),C=conteos(t.id),esperados=new Set(t.esperados||[]),abierta=t.estado==='abierta',estado=abierta?'PRELIMINAR':'DEFINITIVO';
+ const L=bienes().map(b=>{const c=C[b.id];return {b,c,cr:esAnual(t)&&esperados.has(b.id)?crFijo(t,b.id):crReporte(b),r:esperados.has(b.id)?resultadoToma(t,b.id,C):(c?.r||'Fuera del alcance'),alcance:esperados.has(b.id)};}).sort((a,b)=>(a.b.seccion||a.b.categoria||'Sin sección').localeCompare(b.b.seccion||b.b.categoria||'Sin sección','es')||codigoTomaKey(a.b.codCont).localeCompare(codigoTomaKey(b.b.codCont),'es',{numeric:true})||a.b.id.localeCompare(b.b.id));
  const suma=(arr,k)=>arr.reduce((s,x)=>s+(Number(x.b[k])||0),0),red=v=>Math.round((v+Number.EPSILON)*100)/100;
  const cab=nombre=>[[{v:'FORMATO 7.1 — REGISTRO DE ACTIVOS FIJOS Y TOMA FÍSICA',s:'t'}],[`PERÍODO: ${meta.periodo}`],[`RUC: ${meta.ruc}`],[`RAZÓN SOCIAL: ${meta.razon}`],[{v:`${nombre} · ${t.nombre} · ${estado}`,s:'lab'}],[`Inicio: ${ddmmyyyy(t.creado)} · Cierre: ${ddmmyyyy(t.cierre)} · Emisión: ${ddmmyyyy(nowIso())}`]];
  const hoja=(name,heads,rows,cols)=>({name,rows:[...cab(name),heads.map(v=>({v,s:'h'})),...rows],cols,freeze:7,titles:'7',grid:false,foot:`${meta.razon} · ${t.nombre} · ${estado}`});
@@ -2248,17 +2320,17 @@ async function consolidadoToma(t){
  const crs=[...new Set(L.map(x=>x.cr))].sort((a,b)=>(S.data.config.crPrioridad?.crs?.[a]?.prioridad??1e9)-(S.data.config.crPrioridad?.crs?.[b]?.prioridad??1e9)||a.localeCompare(b));
  for(const cr of crs)resumen.rows.push([`${cr}${S.data.config.crPrioridad?.crs?.[cr]?.nombre?' — '+S.data.config.crPrioridad.crs[cr].nombre:''}`,...counts(L.filter(x=>x.cr===cr))]);
  resumen.rows.push([''],['Sobrantes (líneas)',(t.sobrantes||[]).length],['Sobrantes (unidades)',(t.sobrantes||[]).reduce((n,s)=>n+(Number(s.cant)||1),0)],[''],['Firmas'],[''],['Responsable del inventario','','Contabilidad','','Gerencia / Auditoría'],['Nombre:','','Nombre:','','Nombre:'],['Fecha:','','Fecha:','','Fecha:']);
- const HD=['Código contable','Cuenta contable','Descripción','Marca','Modelo','Serie / placa','Valor histórico','Fecha de adquisición','Valor neto','Cargo del responsable','CR','ID de etiqueta','Resultado','Fecha de verificación','Edificio','Piso','Zona','Ubicación','Estado','Operatividad','Observaciones','Verificado por','Origen','Código ADM','Sección','CR original (referencia)'];
+ const HD=['Código contable','Cuenta contable','Descripción','Marca','Modelo','Serie / placa','Valor histórico','Fecha de adquisición','Valor neto','Cargo del responsable','CR','ID de etiqueta','Resultado','Fecha de verificación','Edificio','Piso','Zona','Ubicación','Estado','Operatividad','Observaciones','Verificado por','Origen','Código ADM','Sección','CR original (referencia)','Código contable compartido','Registro duplicado','Propuesta','Motivo'];
  const origen=c=>!c?'':c.imp?(typeof c.imp==='object'?`${c.imp.archivo} · ${c.imp.hoja||'ETIQUETA'} · fila ${c.imp.fila}`:`Importado: ${c.imp}`):'App';
- const fila=x=>{const b=x.b,c=x.c||{},en=esEnc(x);return [b.codCont||'',b.cuenta||'',b.nombre||'',b.marca||'',b.modelo||'',b.serie||'',{v:Number(b.valorHist)||0,s:'m'},ddmmyyyy(b.fechaAdq),{v:Number(b.valorNeto)||0,s:'m'},b.cargoResp||'',x.cr,b.idEtq??'',x.r,c.t?ddmmyyyy(c.t):'',en?(edifCorto(c.sede)||c.sede||''):'',en?c.piso||'':'',en?cuadDe(c):'',en?c.ambiente||'':'',en?c.c||'':'',en?c.o||'':'',c.obs||'',c.u?nameOf(c.u):'',origen(x.c),b.codigo||b.id,sec(x),b.crOriginal||''].map((v,i)=>[2,9,17,20,22,25].includes(i)?{v,s:'w'}:v);};
+ const fila=x=>{const b=x.b,c=x.c||{},en=esEnc(x);return [b.codCont||'',b.cuenta||'',b.nombre||'',b.marca||'',b.modelo||'',b.serie||'',{v:Number(b.valorHist)||0,s:'m'},ddmmyyyy(b.fechaAdq),{v:Number(b.valorNeto)||0,s:'m'},b.cargoResp||'',x.cr,b.idEtq??'',x.r,c.t?ddmmyyyy(c.t):'',en?(edifCorto(c.sede)||c.sede||''):'',en?c.piso||'':'',en?cuadDe(c):'',en?c.ambiente||'':'',en?c.c||'':'',en?c.o||'':'',c.obs||'',c.u?nameOf(c.u):'',origen(x.c),b.codigo||b.id,sec(x),b.crOriginal||'',paresCodigo(b.id,b,null,indiceContable).length?'Sí':'No',esRegistroDuplicado(b)?'Sí':'No',esRegistroDuplicado(b)?PROPUESTA_DUPLICADO:'',b.registroDuplicado?.activo?b.registroDuplicado.motivo:''].map((v,i)=>[2,9,17,20,22,25].includes(i)?{v,s:'w'}:v);};
  const detalle=(nombre,arr,subtotales=false)=>{const rows=[];for(const seccion of [...new Set(arr.map(sec))]){const g=arr.filter(x=>sec(x)===seccion);rows.push(...g.map(fila));if(subtotales){const sub=Array(HD.length).fill('');sub[0]=`SUBTOTAL ${seccion}`;sub[6]={v:suma(g,'valorHist'),s:'mb'};sub[8]={v:suma(g,'valorNeto'),s:'mb'};rows.push(sub);}}const total=Array(HD.length).fill('');total[0]='TOTAL';total[6]={v:suma(arr,'valorHist'),s:'mb'};total[8]={v:suma(arr,'valorNeto'),s:'mb'};rows.push(total);return hoja(nombre,HD,rows,[21,18,50,18,18,20,20,20,20,35,18,16,22,22,22,14,16,38,18,18,50,26,48,24,24,40]);};
  const porActivo=[];for(const key of [...new Set(L.map(x=>grupoId({id:x.id,...x.b})))].sort()){const a=L.filter(x=>grupoId({id:x.id,...x.b})===key),ubicaciones=new Map();for(const x of a.filter(esEnc)){const k=ubic(x.c)||'Sin ubicación';if(!ubicaciones.has(k))ubicaciones.set(k,[]);ubicaciones.get(k).push(x.b.idEtq);}
  porActivo.push([grupoNombre(key),a.length,a.filter(esEnc).length,a.filter(x=>x.r==='Pendiente').length,a.filter(x=>x.r==='No localizado').length,[...ubicaciones].map(([u,ids])=>`${u}: ${ids.length} bienes; IDs ${rangoIds(ids.filter(n=>n!=null).map(Number))||'sin etiqueta'}`).join('\n')]);}
  const act=hoja('Grupos de bienes',['Grupo de bienes','Registrados','Encontrados','Pendientes','No localizados','Ubicaciones, cantidades e IDs'],porActivo,[58,16,16,16,18,100]);
  const sob=hoja('Sobrantes',['Descripción','Cantidad','Ubicación','Marca','Modelo','Serie','Estado','Operatividad','Observaciones','Fecha','Registrado por','Unidades regularizadas'],(t.sobrantes||[]).map(s=>[activoKey(s.d),Number(s.cant)||1,s.ub||'',s.marca||'',s.modelo||'',s.serie||'',s.c||'',s.o||'',s.nota||'',ddmmyyyy(s.t),s.u?nameOf(s.u):'',s.regIds?.length||(s.reg?1:0)]),[50,14,50,20,20,22,18,18,48,20,26,24]);
- const dup=detalle('Duplicados del registro',L.filter(x=>x.b.dupRegistro));
+ const dup=detalle('Códigos contables compartidos',L.filter(x=>paresCodigo(x.b.id,x.b,null,indiceContable).length));const hallazgos=detalle('Hallazgos',L.filter(x=>x.alcance&&(esRegistroDuplicado(x.b)||x.r==='Por conciliar')));
  const ubicCR=hoja('Ubicación vs CR',['ID de etiqueta','Código contable','Código ADM','Grupo de bienes','CR único','Ubicación registrada antes','Ubicación encontrada','Observaciones','Carácter del reporte'],L.filter(esEnc).map(x=>[x.b.idEtq??'',x.b.codCont||'',x.b.codigo||x.b.id,grupoNombre(grupoId({id:x.id,...x.b})),x.cr,ubic(x.b),ubic(x.c),x.c?.obs||'','Informativo: no modifica ni concilia el CR']),[16,21,24,58,18,50,50,50,48]);
- return xlsxBlob([resumen,detalle('Detalle',L,true),act,detalle('No localizados',L.filter(x=>x.r==='No localizado')),sob,dup,ubicCR]);
+ return xlsxBlob([resumen,detalle('Detalle',L,true),act,detalle('No localizados',L.filter(x=>x.r==='No localizado')),sob,dup,ubicCR,hallazgos]);
 }
 Object.assign(ACT,{tExcelConsol:async()=>{const t={id:S.tomaSel,...S.data.tomas[S.tomaSel]};openForm({title:'Consolidado para auditoría',note:`${S.data.config.formato71?'Datos contables del Formato 7.1 cargados.':'<p>Faltan los datos contables del Formato 7.1. Carga el Formato 7.1 para generar el consolidado con los datos contables.</p>'}${S.admin?'<button class="btn" type="button" data-act="tFormato71">Cargar Formato 7.1 (datos contables)</button>':''}`,fields:[],ok:'Descargar consolidado para auditoría',submit:async()=>{await guardarArchivo(`Consolidado_${fileSafe(t.nombre)}_${today()}.xlsx`,await consolidadoToma(t));}});}});
 
@@ -2577,7 +2649,7 @@ function validarRegistroCR(t,id){
  if(estadoCR(t,cr)!=='abierta')throw new Error('Este CR está cerrado o en proceso de cierre. Sus registros están bloqueados.');
 }
 function resultadoAnual(t,id,C=conteos(t.id)){
- return C[id]?.r||(estadoCR(t,crFijo(t,id))==='cerrada'?'No localizado':'Pendiente');
+ return resultadoToma(t,id,C);
 }
 function avanceCR(t,cr){
  const ids=cr?idsCR(t,cr):(t.esperados||[]),C=conteos(t.id),r={tot:ids.length,enc:0,conc:0,nol:0,pend:0};
@@ -2649,7 +2721,7 @@ async function comenzarCierreCR(tid,cr,huella,avisados=[],fichasRevisadas=null){
  if(huellaCierreCR(t,cr)!==huella)throw new Error('Los registros o los sobrantes del CR cambiaron. Abre de nuevo el cierre y revisa los totales.');
  const ids=idsCR(t,cr),C=conteos(tid);
  if(!ids.length||cr===SIN_CR)throw new Error('Primero asigna los bienes a un CR válido.');
- if(ids.some(id=>C[id]?.r==='Por conciliar'))throw new Error('Resuelve los bienes por conciliar antes de cerrar este CR.');
+ if(ids.some(id=>C[id]?.r==='Por conciliar'&&!esRegistroDuplicado(S.data.bienes[id])))throw new Error('Resuelve los bienes por conciliar antes de cerrar este CR.');
  const nuevos=ids.map(id=>C[id]).filter(c=>c?.u&&c.u!==S.me&&!avisados.includes(c.u)&&Date.parse(c.t)>Date.now()-600000);
  if(nuevos.length)throw new Error('Hay nueva actividad de otras personas. Revisa otra vez el aviso de cierre.');
  const revision=await cambiosPosterioresCR(t,cr);
@@ -2664,10 +2736,10 @@ async function comenzarCierreCR(tid,cr,huella,avisados=[],fichasRevisadas=null){
 }
 function camposFichaCR(b){return Object.fromEntries(CAMPOS_CIERRE.map(k=>[k,b[k]??null]));}
 function fichaCierreCR(t,cr,op,b,c,fecha){
- const r=c?.r||'No localizado';if(!['Encontrado','No localizado'].includes(r))throw new Error('El CR tiene bienes por conciliar.');
+ const r=esRegistroDuplicado(b)?'Por conciliar':c?.r||'No localizado';if(!['Encontrado','No localizado'].includes(r)&&!esRegistroDuplicado(b))throw new Error('El CR tiene bienes por conciliar.');
  const inv={f:fechaLima(fecha),toma:t.nombre,tomaId:t.id,cr,cierreCR:op,r};
- const fields=r==='No localizado'?{inv}:{amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion||'',oper:c.o||b.oper||'',inv};
- const evento={t:fecha,tipo:r==='Encontrado'?'Verificado en inventario':'No localizado en inventario',det:`${t.nombre} · CR ${cr}${c?.obs?' · '+c.obs:''}`,u:S.me,toma:t.id,cr,cierreCR:op,prev:camposFichaCR(b)};
+ const fields=r!=='Encontrado'?{inv}:{amb:c.amb||'',cuad:cuadDe(c),pt:c.pt||null,sede:c.sede||'',piso:c.piso||'',ambiente:c.ambiente||'',ubicacion:ubic(c),responsable:c.cu||b.responsable||'',condicion:c.c||b.condicion||'',oper:c.o||b.oper||'',inv};
+ const evento={t:fecha,tipo:r==='Encontrado'?'Verificado en inventario':r==='Por conciliar'?'Registro duplicado en inventario':'No localizado en inventario',det:`${t.nombre} · CR ${cr}${c?.obs?' · '+c.obs:''}`,u:S.me,toma:t.id,cr,cierreCR:op,prev:camposFichaCR(b)};
  const orig={...(b.origenDatos||{})};const M={sede:'sede',piso:'piso',ambiente:'ambiente',responsable:'cu',condicion:'c',oper:'o',amb:'amb',cuad:'cuad',pt:'pt'};for(const [k,v]of Object.entries(fields)){const fuente=c?.origenDatos?.[M[k]];orig[k]=fuente||{tipo:c?.origen||(c?.imp?'importación':'registro manual'),archivo:typeof c?.imp==='object'?c.imp.archivo:c?.imp||'',fecha,u:S.me};}return {...b,...fields,origenDatos:orig,hist:[...(b.hist||[]),evento],act:fecha};
 }
 async function aplicarFilaCR(tid,cr,op,id){
@@ -2680,14 +2752,14 @@ async function aplicarFilaCR(tid,cr,op,id){
   const last=t.crEstados[cr].ultimoCierre;
   if(last&&firmaDatos(b)!==a.fichasRevisadas?.[id])throw new Error(`La ficha ${b.codigo||id} cambió desde la vista previa. Revierte este cierre incompleto y revisa los cambios antes de cerrar de nuevo.`);
   const nuevo=fichaCierreCR({id:tid,...t},cr,op,b,c,a.fecha),prev=camposFichaCR(b),despues=camposFichaCR(nuevo);
-  const dato={cr,bienId:id,bien:limpiarDocumento(b),conteo:c||null,resultado:c?.r||'No localizado',inventariador:c?.u?nameOf(c.u):'',prev,despues,firmaDespues:firmaDatos(nuevo),versionConteo:versionConteo(c)};
+  const dato={cr,bienId:id,bien:limpiarDocumento(b),conteo:c||null,resultado:esRegistroDuplicado(b)?'Por conciliar':c?.r||'No localizado',codigoContableCompartido:paresCodigo(id,b).length>0,inventariador:c?.u?nameOf(c.u):'',prev,despues,firmaDespues:firmaDatos(nuevo),versionConteo:versionConteo(c)};
   return {writes:[[`bienes/${id}`,nuevo],[`${base}/filas/${id}`,dato]],value:dato};
  });
 }
 async function terminarCierreCR(tid,cr,op){
  exigirAdmin();const base=`tomas/${tid}/actasCR/${op}`,a=await leerCR(base),F=await coleccionCR(`${base}/filas`);
  if(!a||a.ids.length!==Object.keys(F).length||a.ids.some(id=>!F[id]||F[id].cr!==cr))throw new Error('El cierre está incompleto. Usa «Continuar cierre».');
- const rows=a.ids.map(id=>F[id]),resumen={tot:rows.length,enc:rows.filter(x=>x.resultado==='Encontrado').length,conc:0,nol:rows.filter(x=>x.resultado==='No localizado').length,sob:a.sobrantes.reduce((n,s)=>n+(Number(s.cant)||1),0),valorHistoricoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorHist)||0),0),valorNetoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorNeto)||0),0)};
+ const rows=a.ids.map(id=>F[id]),resumen={tot:rows.length,enc:rows.filter(x=>x.resultado==='Encontrado').length,conc:rows.filter(x=>x.resultado==='Por conciliar').length,nol:rows.filter(x=>x.resultado==='No localizado').length,sob:a.sobrantes.reduce((n,s)=>n+(Number(s.cant)||1),0),valorHistoricoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorHist)||0),0),valorNetoNoLocalizados:rows.filter(x=>x.resultado==='No localizado').reduce((n,x)=>n+(Number(x.bien.valorNeto)||0),0)};
  return transaccionCR([`tomas/${tid}`,base],([t,acta])=>{
   exigirAdmin();if(acta?.estado==='definitiva'&&t?.crEstados[cr]?.ultimoCierre===op)return {value:acta};
   if(!t||t.estado!=='abierta'||t.crEstados[cr]?.estado!=='cerrando'||t.crEstados[cr].op!==op||acta?.estado!=='proceso')throw new Error('El cierre cambió. Revisa el CR.');
@@ -2748,11 +2820,11 @@ function hojasActaCR(a,F){
  const rows=a.ids.map(id=>F[id]);if(a.estado!=='definitiva'||rows.some(f=>!f||f.cr!==a.cr||f.revertida))throw new Error('El acta aún no es definitiva o está incompleta.');
  const meta=a.meta||{},s=a.resumen,netoNoLocalizados=s.valorNetoNoLocalizados??rows.filter(f=>f.resultado==='No localizado').reduce((n,f)=>n+(Number(f.bien.valorNeto)||0),0),nombre=a.crNombre||a.cr,cab=[[{v:'ACTA DE CIERRE POR CENTRO DE RESPONSABILIDAD',s:'t'}],[meta.razon||'Sociedad Bíblica Peruana'],[`RUC: ${meta.ruc||''} · Período: ${meta.periodo||''}`],[`${a.tomaNombre} · ${nombre}`],[`Cierre: ${fmtDT(a.fecha)} · Versión ${a.version} · DEFINITIVA`],[`Administrador: ${a.nombreAdministrador}`]];
  const sheet=(name,heads,data,cols)=>({name,rows:[...cab,heads.map(v=>({v,s:'h'})),...data],cols,freeze:7,titles:'7',grid:false,foot:`${a.tomaNombre} · CR ${a.cr} · v${a.version}`});
- const acta=sheet('Acta',['Resultado','Cantidad / importe'],[['Bienes del CR',s.tot],['Encontrados',s.enc],['Por conciliar',0],['No localizados',s.nol],['Pendientes',0],['Valor histórico total de los no localizados',{v:s.valorHistoricoNoLocalizados,s:'m'}],['Valor neto total de los no localizados',{v:netoNoLocalizados,s:'m'}],['Sobrantes del CR (unidades)',s.sob],[],['Firmas'],['Inventariador','Responsable del CR','Administrador'],['Nombre:','Nombre:','Nombre:'],['Firma:','Firma:','Firma:'],['Fecha:','Fecha:','Fecha:']],[58,28,28]);
- const heads=['ID etiqueta','Código ADM','Código contable','Descripción','CR','Resultado','Valor histórico','Valor neto','Ubicación encontrada','Conservación','Operatividad','Observación','Inventariador','Fecha de registro'];
- const fila=f=>{const b=f.bien,c=f.conteo||{},en=f.resultado==='Encontrado';return [b.idEtq??'',b.codigo||f.bienId,b.codCont||'',b.nombre||'',a.cr,f.resultado,{v:Number(b.valorHist)||0,s:'m'},{v:Number(b.valorNeto)||0,s:'m'},en?ubic(c):'',en?c.c||'':'',en?c.o||'':'',c.obs||'',f.inventariador||'',fechaActaCR(c.t)];};
+ const acta=sheet('Acta',['Resultado','Cantidad / importe'],[['Bienes del CR',s.tot],['Encontrados',s.enc],['Por conciliar',s.conc||0],['No localizados',s.nol],['Pendientes',0],['Valor histórico total de los no localizados',{v:s.valorHistoricoNoLocalizados,s:'m'}],['Valor neto total de los no localizados',{v:netoNoLocalizados,s:'m'}],['Sobrantes del CR (unidades)',s.sob],[],['Firmas'],['Inventariador','Responsable del CR','Administrador'],['Nombre:','Nombre:','Nombre:'],['Firma:','Firma:','Firma:'],['Fecha:','Fecha:','Fecha:']],[58,28,28]);
+ const heads=['ID etiqueta','Código ADM','Código contable','Descripción','CR','Resultado','Valor histórico','Valor neto','Ubicación encontrada','Conservación','Operatividad','Observación','Inventariador','Fecha de registro','Código contable compartido','Registro duplicado','Propuesta','Motivo'];
+ const fila=f=>{const b=f.bien,c=f.conteo||{},en=f.resultado==='Encontrado';return [b.idEtq??'',b.codigo||f.bienId,b.codCont||'',b.nombre||'',a.cr,f.resultado,{v:Number(b.valorHist)||0,s:'m'},{v:Number(b.valorNeto)||0,s:'m'},en?ubic(c):'',en?c.c||'':'',en?c.o||'':'',c.obs||'',f.inventariador||'',fechaActaCR(c.t),f.codigoContableCompartido?'Sí':'No',esRegistroDuplicado(b)?'Sí':'No',esRegistroDuplicado(b)?PROPUESTA_DUPLICADO:'',esRegistroDuplicado(b)?b.registroDuplicado.motivo:''];};
  const detalle=sheet('Detalle',heads,rows.map(fila),[16,24,24,58,18,22,22,22,50,20,20,55,28,24]);
- const hall=sheet('Hallazgos',heads,[...rows.filter(f=>f.resultado!=='Encontrado').map(fila),[],['SOBRANTES DEL CR'],['Descripción','Cantidad','CR','Ubicación','Marca','Modelo','Serie','Conservación','Operatividad','Observación','Registrado por','Fecha','Unidades regularizadas'],...a.sobrantes.map(x=>[x.d,Number(x.cant)||1,a.cr,x.ub||'',x.marca||'',x.modelo||'',x.serie||'',x.c||'',x.o||'',x.nota||'',x.inventariador||'',fechaActaCR(x.t),(x.regIds||[]).length||(x.reg?1:0)])],[22,24,24,58,20,22,22,22,50,20,28,55,28,24]);
+ const hall=sheet('Hallazgos',heads,[...rows.filter(f=>f.resultado!=='Encontrado'||f.codigoContableCompartido||esRegistroDuplicado(f.bien)).map(fila),[],['SOBRANTES DEL CR'],['Descripción','Cantidad','CR','Ubicación','Marca','Modelo','Serie','Conservación','Operatividad','Observación','Registrado por','Fecha','Unidades regularizadas'],...a.sobrantes.map(x=>[x.d,Number(x.cant)||1,a.cr,x.ub||'',x.marca||'',x.modelo||'',x.serie||'',x.c||'',x.o||'',x.nota||'',x.inventariador||'',fechaActaCR(x.t),(x.regIds||[]).length||(x.reg?1:0)])],[22,24,24,58,20,22,22,22,50,20,28,55,28,24]);
  return [acta,detalle,hall];
 }
 async function descargarActaCR(tid,op){
@@ -2779,10 +2851,10 @@ Object.assign(ACT,{
  anTodos(){S.anCR=null;S.tCR='';S.tPrioridad='';S.tActivoFiltro='';S.tq='';S.tAmb='';S.tf='todos';render();},
  anConciliar(cr){$('#modal').close();ACT.anVer(cr);S.tf='conciliar';S.tView='lista';render();},
  async anCerrar(cr){
-  exigirAdmin();const t=await refrescarTomaCR(S.tomaSel),p=avanceCR(t,cr),huella=huellaCierreCR(t,cr),revision=await cambiosPosterioresCR(t,cr),otros=usuariosRecientes(t.id,Date.now(),cr).filter(x=>x.u!==S.me);
-  const note=`${revision.cambios.length?`<p class="err">${revision.cambios.length} fichas cambiaron después del acta anterior: ${revision.cambios.map(x=>esc(x.etiqueta?'ID '+x.etiqueta:x.codigo)+(x.otraToma?' (cierre en otra toma)':'')).join(', ')}. Revisa las fichas antes de aplicar este cierre.</p>`:''}<b>${esc(nombreCR(cr))}</b><p>${p.tot} bienes del CR · ${p.enc} encontrados · ${p.conc} por conciliar · ${p.nol} no localizados · ${p.pend} pendientes.</p><p><b>${p.pend} pendientes pasarán a «No localizado».</b> Se actualizarán únicamente las ${p.tot} fichas de este CR.</p><p>Bienes de otros CR (no se tocan): <b>${(t.esperados||[]).length-p.tot}</b>.</p><button type="button" class="btn link" data-act="anConciliar" data-id="${esc(cr)}">Ver por conciliar</button>${p.conc?'<p class="err">Resuelve los bienes por conciliar antes de cerrar.</p>':''}${otros.length?`<p class="err">Actividad reciente en este CR: ${otros.map(x=>esc(who(x.u))).join(', ')}. Coordina antes de cerrar.</p>`:''}<p>Se generará el Excel de este CR: Acta, Detalle y Hallazgos, incluidos sus sobrantes y los valores histórico y neto totales de sus no localizados.</p>`;
-  openForm({title:'Cerrar CR',note,danger:true,ok:p.conc?'Resolver por conciliar':'Cerrar CR y descargar acta',fields:p.conc?[]:[...(revision.cambios.length?[{k:'cambios',l:'Cambios posteriores al acta anterior',t:'select',opts:[['','Revisar primero'],['si','Revisé las fichas; aplicar los resultados de este cierre']],req:true,full:true}]:[]),...(otros.length?[{k:'actividad',l:'Actividad reciente',t:'select',opts:[['','Coordinar primero'],['si','Ya coordiné; continuar']],req:true,full:true}]:[]),{k:'conf',l:`Escribe CERRAR ${cr}`,req:true,full:true}],submit:async v=>{
-   exigirAdmin();if(p.conc){ACT.anConciliar(cr);return;}
+  exigirAdmin();const t=await refrescarTomaCR(S.tomaSel);if(DB)await coleccionCR('bienes');const p=avanceCR(t,cr),bloqueados=idsCR(t,cr).filter(id=>conteos(t.id)[id]?.r==='Por conciliar'&&!esRegistroDuplicado(S.data.bienes[id])).length,huella=huellaCierreCR(t,cr),revision=await cambiosPosterioresCR(t,cr),otros=usuariosRecientes(t.id,Date.now(),cr).filter(x=>x.u!==S.me);
+  const note=`${revision.cambios.length?`<p class="err">${revision.cambios.length} fichas cambiaron después del acta anterior: ${revision.cambios.map(x=>esc(x.etiqueta?'ID '+x.etiqueta:x.codigo)+(x.otraToma?' (cierre en otra toma)':'')).join(', ')}. Revisa las fichas antes de aplicar este cierre.</p>`:''}<b>${esc(nombreCR(cr))}</b><p>${p.tot} bienes del CR · ${p.enc} encontrados · ${p.conc} por conciliar · ${p.nol} no localizados · ${p.pend} pendientes.</p><p><b>${p.pend} pendientes pasarán a «No localizado».</b> Se actualizarán únicamente las ${p.tot} fichas de este CR.</p><p>Bienes de otros CR (no se tocan): <b>${(t.esperados||[]).length-p.tot}</b>.</p><button type="button" class="btn link" data-act="anConciliar" data-id="${esc(cr)}">Ver por conciliar</button>${bloqueados?'<p class="err">Resuelve los bienes por conciliar antes de cerrar.</p>':''}${p.conc>bloqueados?`<p>${p.conc-bloqueados} registros duplicados quedarán Por conciliar y se incluirán en Hallazgos con propuesta de baja como duplicado.</p>`:''}${otros.length?`<p class="err">Actividad reciente en este CR: ${otros.map(x=>esc(who(x.u))).join(', ')}. Coordina antes de cerrar.</p>`:''}<p>Se generará el Excel de este CR: Acta, Detalle y Hallazgos, incluidos sus sobrantes y los valores histórico y neto totales de sus no localizados.</p>`;
+  openForm({title:'Cerrar CR',note,danger:true,ok:bloqueados?'Resolver por conciliar':'Cerrar CR y descargar acta',fields:bloqueados?[]:[...(revision.cambios.length?[{k:'cambios',l:'Cambios posteriores al acta anterior',t:'select',opts:[['','Revisar primero'],['si','Revisé las fichas; aplicar los resultados de este cierre']],req:true,full:true}]:[]),...(otros.length?[{k:'actividad',l:'Actividad reciente',t:'select',opts:[['','Coordinar primero'],['si','Ya coordiné; continuar']],req:true,full:true}]:[]),{k:'conf',l:`Escribe CERRAR ${cr}`,req:true,full:true}],submit:async v=>{
+   exigirAdmin();if(bloqueados){ACT.anConciliar(cr);return;}
    if(v.conf!==`CERRAR ${cr}`)return {error:`Escribe CERRAR ${cr}.`};
    const op=await comenzarCierreCR(t.id,cr,huella,otros.map(x=>x.u),revision.firmas);await ejecutarCierreCR(t.id,cr,op);
   }});
