@@ -1390,7 +1390,7 @@ const ACT = {
   mCompletar(id){
     exigirEscritura();const m=S.data.mantenimientos[id];if(!m||!ordenAbierta(m))return toast('La orden ya está cerrada.');const b=S.data.bienes[m.bienId]||{},checklist=structuredClone(m.checklist||[]);
     openForm({title:'Completar mantenimiento',fields:[{k:'fechaReal',l:'Fecha de realización',t:'date',v:today(),req:true},F.condicion(b.condicion==='Por evaluar'?'Bueno':b.condicion),F.oper(b.oper==='No probado'?'Operativo':b.oper),...(checklist.length?[{k:'hechas',l:'Tareas realizadas (todas obligatorias)',t:'checks',full:true,v:checklist.flatMap((x,i)=>x.ok?[String(i)]:[]),opts:checklist.map((x,i)=>[String(i),x.t]),help:'Si una tarea no aplica, márcala y explica el motivo en el trabajo realizado.'}]:[]),{k:'trabajo',l:'Trabajo realizado',t:'textarea',req:true,full:true,v:m.trabajo||m.resultado||''},{k:'costo',l:'Costo (S/)',t:'number',v:m.costo,help:'Opcional, mayor o igual a cero.'},...ejecutorFields(m)],submit:async v=>{
-      exigirEscritura();const actual=S.data.mantenimientos[id];if(!actual||!ordenAbierta(actual))return {error:'La orden ya está cerrada.'};if(JSON.stringify(actual.checklist||[])!==JSON.stringify(checklist))return {error:'Las tareas cambiaron. Abre de nuevo la orden.'};
+      exigirEscritura();const actual=S.data.mantenimientos[id];if(!actual||!ordenAbierta(actual))return {error:'La orden ya está cerrada.'};if(jsonEstable(actual.checklist||[])!==jsonEstable(checklist))return {error:'Las tareas cambiaron. Abre de nuevo la orden.'};
       if(checklist.some((_,i)=>!(v.hechas||[]).includes(String(i))))return {error:'Marca todas las tareas antes de completar.'};if(v.costo!=null&&(!Number.isFinite(v.costo)||v.costo<0))return {error:'El costo debe ser un número mayor o igual a cero.'};if(!e3FechaValida(v.fechaReal))return {error:'Indica una fecha válida.'};if(!v.trabajo.trim())return {error:'Describe el trabajo realizado.'};
       const ejecutor=ejecutorValores(v);await patch('mantenimientos',id,{estado:'completado',fechaReal:v.fechaReal,resultado:v.trabajo,trabajo:v.trabajo,costo:v.costo,...ejecutor,condFinal:v.condicion,operFinal:v.oper,...(checklist.length?{checklist:checklist.map(x=>({...x,ok:true}))}:{})});
       const bien=S.data.bienes[m.bienId];if(bien){const f={};if(bien.etapa==='mantenimiento'&&!mants().some(x=>x.id!==id&&x.bienId===m.bienId&&x.estado==='en_curso'&&x.fuera))f.etapa='en_uso';await bienPatch(m.bienId,f,ev(`Mantenimiento ${m.tipo.toLowerCase()} completado`,`${v.trabajo} · ${v.condicion}, ${v.oper}${v.costo?` · S/ ${Number(v.costo).toFixed(2)}`:''}`));}
@@ -3147,11 +3147,11 @@ function ppVistaPrevia(ids,desde){
  exigirAdmin();if(!N){toast('No hay órdenes nuevas para crear.');return;}
  if(Q.filter(x=>x.ordenes.length>100).some((x,i)=>!($('#ff-conf'+i+' input:checked'))))return {error:'Confirma la cantidad de órdenes de cada plan destacado.'};
  // Una vista previa que cambió debe revisarse otra vez; nunca amplía la cantidad confirmada.
- const actual=ppPropuesta(ids,desde);if(JSON.stringify(actual)!==JSON.stringify(Q))return {error:'La programación cambió. Vuelve a generar la vista previa.'};
+ const actual=ppPropuesta(ids,desde);if(jsonEstable(actual)!==jsonEstable(Q))return {error:'La programación cambió. Vuelve a generar la vista previa.'};
  S.abortar=false;let creadas=0;const r=await runMany(Q.flatMap(x=>x.ordenes.map(o=>async()=>{
   exigirAdmin();const pair=mants().filter(m=>!m._del&&m.planId===x.id&&m.bienId===o.bienId);const abiertas=pair.filter(ordenAbierta);if(abiertas.length)return;
   const paths=['mantenimientos/'+o.id,'planesPreventivos/'+x.id,'bienes/'+o.bienId,...pair.map(m=>'mantenimientos/'+m.id).filter(path=>path!=='mantenimientos/'+o.id)];
-  const creada=await transaccionCR(paths,([existe,p,b,...otras])=>{exigirAdmin();if(existe||otras.some(m=>m&&ordenAbierta(m)))return {value:false};if(!p||p.activo===false||JSON.stringify(limpiarDocumento(p))!==JSON.stringify(x.p)||!b||b.etapa==='baja'||tipoDeBien({...b,id:o.bienId})!==p.tipoBienId)throw new Error('El plan o el bien cambió.');
+  const creada=await transaccionCR(paths,([existe,p,b,...otras])=>{exigirAdmin();if(existe||otras.some(m=>m&&ordenAbierta(m)))return {value:false};if(!p||p.activo===false||jsonEstable(limpiarDocumento(p))!==jsonEstable(x.p)||!b||b.etapa==='baja'||tipoDeBien({...b,id:o.bienId})!==p.tipoBienId)throw new Error('El plan o el bien cambió.');
    const ejecutor=ejecutorValores({ejecutor:p.personaId?'persona:'+p.personaId:p.proveedorId?'proveedor:'+p.proveedorId:'otro',tecnico:p.tecnico});
    return {writes:[['mantenimientos/'+o.id,{bienId:o.bienId,planId:x.id,tipo:'Preventivo',fechaProg:o.fechaProg,descripcion:p.nombre,...ejecutor,checklist:p.tareas.map(t=>({t,ok:false})),estado:'programado',creado:nowIso(),u:S.me||null}]],value:true};});if(creada)creadas++;
  })),4,(d,n,f)=>ppProgreso(d,n,f));
@@ -3289,6 +3289,8 @@ function estructuraAnual(ids){
  const crEstados=Object.fromEntries([...new Set(Object.values(crPorBien))].map(cr=>[cr,{estado:'abierta',version:0,actas:[]}]));
  return {anualCR:1,crPorBien,crEstados,cierresRealizados:0,cierresEnCurso:0};
 }
+/* Compara documentos sin depender del orden de sus campos (Firestore no conserva el orden en que se escribieron). */
+const jsonEstable=v=>JSON.stringify(v,(k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(j=>[j,x[j]])):x);
 function limpiarDocumento(d){const x=structuredClone(d);delete x._m;return x;}
 // Todas las mutaciones nuevas pasan por DBX; la transacción publica el estado local solo tras confirmar.
 async function transaccionCR(paths,fn){
