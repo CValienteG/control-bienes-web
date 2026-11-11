@@ -3140,6 +3140,7 @@ function ppPropuesta(ids,desde){
  ordenes.push({id:'MP-'+encodeURIComponent(id)+'-'+encodeURIComponent(b.id)+'-'+historial.length,bienId:b.id,fechaProg:fecha});}
  const fechas=ordenes.map(o=>o.fechaProg).sort();return {id,p:limpiarDocumento(p),bienes:B.length,ordenes,primera:fechas[0]||'',ultima:fechas.at(-1)||''};}).filter(Boolean);
 }
+const ppEsencial=p=>p&&{nombre:p.nombre||'',tipoBienId:p.tipoBienId||'',frecuenciaMeses:Number(p.frecuenciaMeses)||0,tareas:(p.tareas||[]).map(String),personaId:p.personaId||null,proveedorId:p.proveedorId||null,tecnico:p.tecnico||'',activo:p.activo!==false};
 function ppProgreso(d,n,f){modalProgress(`${d} de ${n} órdenes procesadas${f?' · '+f+' con error':''}`);const progress=document.createElement('progress');progress.max=n;progress.value=d;progress.style.width='100%';progress.setAttribute('aria-label','Órdenes procesadas');$('#mextra')?.prepend(progress);}
 function ppVistaPrevia(ids,desde){
  const Q=ppPropuesta(ids,desde),N=Q.reduce((n,x)=>n+x.ordenes.length,0);
@@ -3148,14 +3149,14 @@ function ppVistaPrevia(ids,desde){
  if(Q.filter(x=>x.ordenes.length>100).some((x,i)=>!($('#ff-conf'+i+' input:checked'))))return {error:'Confirma la cantidad de órdenes de cada plan destacado.'};
  // Una vista previa que cambió debe revisarse otra vez; nunca amplía la cantidad confirmada.
  const actual=ppPropuesta(ids,desde);if(jsonEstable(actual)!==jsonEstable(Q))return {error:'La programación cambió. Vuelve a generar la vista previa.'};
- S.abortar=false;let creadas=0;const r=await runMany(Q.flatMap(x=>x.ordenes.map(o=>async()=>{
+ S.abortar=false;let creadas=0;const motivos=new Map();const r=await runMany(Q.flatMap(x=>x.ordenes.map(o=>async()=>{try{
   exigirAdmin();const pair=mants().filter(m=>!m._del&&m.planId===x.id&&m.bienId===o.bienId);const abiertas=pair.filter(ordenAbierta);if(abiertas.length)return;
   const paths=['mantenimientos/'+o.id,'planesPreventivos/'+x.id,'bienes/'+o.bienId,...pair.map(m=>'mantenimientos/'+m.id).filter(path=>path!=='mantenimientos/'+o.id)];
-  const creada=await transaccionCR(paths,([existe,p,b,...otras])=>{exigirAdmin();if(existe||otras.some(m=>m&&ordenAbierta(m)))return {value:false};if(!p||p.activo===false||jsonEstable(limpiarDocumento(p))!==jsonEstable(x.p)||!b||b.etapa==='baja'||tipoDeBien({...b,id:o.bienId})!==p.tipoBienId)throw new Error('El plan o el bien cambió.');
+  const creada=await transaccionCR(paths,([existe,p,b,...otras])=>{exigirAdmin();if(existe||otras.some(m=>m&&ordenAbierta(m)))return {value:false};if(!p||p.activo===false||jsonEstable(ppEsencial(p))!==jsonEstable(ppEsencial(x.p))||!b||b.etapa==='baja'||tipoDeBien({...b,id:o.bienId})!==p.tipoBienId)throw new Error('El plan o el bien cambió.');
    const ejecutor=ejecutorValores({ejecutor:p.personaId?'persona:'+p.personaId:p.proveedorId?'proveedor:'+p.proveedorId:'otro',tecnico:p.tecnico});
-   return {writes:[['mantenimientos/'+o.id,{bienId:o.bienId,planId:x.id,tipo:'Preventivo',fechaProg:o.fechaProg,descripcion:p.nombre,...ejecutor,checklist:p.tareas.map(t=>({t,ok:false})),estado:'programado',creado:nowIso(),u:S.me||null}]],value:true};});if(creada)creadas++;
+   return {writes:[['mantenimientos/'+o.id,{bienId:o.bienId,planId:x.id,tipo:'Preventivo',fechaProg:o.fechaProg,descripcion:p.nombre,...ejecutor,checklist:p.tareas.map(t=>({t,ok:false})),estado:'programado',creado:nowIso(),u:S.me||null}]],value:true};});if(creada)creadas++;}catch(e){const m=(e&&(e.code?e.code+': ':'')+(e.message||String(e)))||'Error desconocido';console.error('Generar programación',o.id,e);motivos.set(m,(motivos.get(m)||0)+1);throw e;}
  })),4,(d,n,f)=>ppProgreso(d,n,f));
- if(r.fail)return {error:`Se crearon ${creadas} órdenes; ${r.fail} no se pudieron crear. Genera otra vista previa para reintentar sin duplicados.`};toast(`${creadas} órdenes creadas.`);
+ if(r.fail)return {error:`Se crearon ${creadas} órdenes; ${r.fail} no se pudieron crear. Motivo: ${[...motivos].map(([m,n])=>m+(n>1?` (${n})`:'')).join(' · ')}. Genera otra vista previa para reintentar sin duplicados.`};toast(`${creadas} órdenes creadas.`);
  }});
 }
 function fallasFichaHtml(id){const L=fallas().filter(f=>f.bienId===id&&f.estado==='reportada');return `<section data-fallas-bien><h3 class="sec">Fallas reportadas (${L.length})</h3>${L.map(f=>`<p>${esc(f.texto)}<span class="small muted"> · ${esc(who(f.u))} · ${fmtDT(f.t)}</span></p>`).join('')||'<p class="hint">No hay fallas abiertas.</p>'}${!S.readonly?`<button class="btn sm" data-act="fReportar" data-id="${esc(id)}">Reportar falla</button>`:''}</section>`;}
