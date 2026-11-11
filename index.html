@@ -504,11 +504,11 @@ const PAGE = 150;
 
 /* ---------- Estado ---------- */
 const S = {
-  data:{bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}, areas:{}, personas:{}, tiposBien:{}},
+  data:{dudas:{}, bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}, areas:{}, personas:{}, tiposBien:{}},
   loaded:{bienes:false, mantenimientos:false, tomas:false, sistemas:false, equipos:false, planos:false}, tView:'lista', sisSel:null,
   mode:'loading', me:null, myName:'', names:{}, view:'resumen', sel:null,
   q:'', f:{tipo:'', etapa:'activos', area:'', ubic:'', cond:'', verif:''}, lim:PAGE,
-  mf:'pendientes', tomaSel:null, tf:'pendientes', tq:'', tlim:PAGE, readonly:false,
+  mf:'pendientes', tomaSel:null, tf:'pendientes', tAgr:'', tq:'', tlim:PAGE, readonly:false,
   here:{sede:'',piso:'',ambiente:'',cu:'',c:'Bueno',o:'Operativo'}, busy:false,
 };
 try{ const h=JSON.parse(localStorage.getItem('cb-here')||'null'); if(h) Object.assign(S.here,h); }catch(e){}
@@ -693,7 +693,7 @@ async function cambiarRegistroDuplicado(id,activo,motivo,esperada){
 }
 
 /* ---------- Etapa 2.5: permisos y conteos compartidos ---------- */
-const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','registroDuplicado','tFormato71','uImportar','uUsuarios','uResponsablesCR','sCategorias','orgSembrar','arNueva','arEditar','peNueva','peEditar','peUnir','peDesdeTexto','peVincularTexto','tbSembrar','tbNuevo','tbEditar','tbAtributos']);
+const ADMIN_ACT=new Set(['dResponder','tCerrar','tEliminar','tRevertir','registroDuplicado','tFormato71','uImportar','uUsuarios','uResponsablesCR','sCategorias','orgSembrar','arNueva','arEditar','peNueva','peEditar','peUnir','peDesdeTexto','peVincularTexto','tbSembrar','tbNuevo','tbEditar','tbAtributos']);
 let accionActual=null, actividadT=null;
 function errorPermiso(msg){ return Object.assign(new Error(msg),{code:'app-permission'}); }
 function exigirEscritura(){ if(S.readonly) throw errorPermiso('Tienes acceso de solo lectura.'); }
@@ -1032,13 +1032,14 @@ function igualesGrupos(L=igualesFuente()){return gruposBienes(L,grupoContexto())
 function igualesFilas(g){return [agrupadorGrupo(g),g.nombre,g.items.length,g.ver,g.pend,igIds(g.items),[...g.ubic].map(([u,n])=>`${u}: ${n}`).join('; '),Object.entries(g.est).map(([c,n])=>`${c}: ${n}`).join('; ')];}
 async function gruposExcel(uno){const G=uno==='uno'?[igualesActual()].filter(Boolean):igualesGrupos();await guardarArchivo(`Grupos_de_bienes_${today()}.xlsx`,await xlsxBlob([{name:'Grupos de bienes',rows:[['Agrupador','Grupo','Total','Verificados','Pendientes','IDs en rangos','Por ubicación','Por conservación'],...G.map(igualesFilas)],cols:[30,55,12,16,16,45,70,50],freeze:1}]));}
 function igualesActual(){return igualesGrupos().find(g=>g.key===S.igKey);}
-function igualesPanel(key){S.igKey=key;const g=igualesActual(),t=grupoContexto();if(!g)return toast('El grupo cambió. Actualiza la vista.');const ids=new Set(g.items.map(b=>b.id)),hist=Object.entries(S.data.config).map(([id,x])=>({id,...x})).filter(x=>x.tipo==='Edición de grupo'&&(x.grupos||[]).includes(key)||x.tipo==='Actualización de bienes iguales'&&x.prev?.some(b=>ids.has(b.id))).sort((a,b)=>ordenFecha(b.fecha)-ordenFecha(a.fecha));const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(g.nombre)}</h2><button class="btn ghost" data-act="closeModal">✕</button></div><div class="m-b" style="display:block"><p>Agrupador: <b>${esc(agrupadorGrupo(g))}</b></p><p>${g.items.length} bienes · ${g.ver} verificados · ${g.pend} pendientes · IDs ${esc(igIds(g.items)||'sin ID')}</p><div class="row ro-hide"><button class="btn" data-act="grAgrupador" data-id="grupo">Cambiar agrupador</button><button class="btn" data-act="grEditar" data-id="renombrar">Renombrar</button><button class="btn" data-act="grEditar" data-id="unir">Unir grupos</button><button class="btn" data-act="grEditar" data-id="separar">Separar bienes</button><button class="btn" data-act="grEditar" data-id="mover">Mover a otro grupo</button><button class="btn" data-act="igLote">Actualizar ubicación, conservación o custodio</button>${t?.estado==='abierta'?'<button class="btn" data-act="grRegistrar" data-id="cantidad">Registrar cantidad</button><button class="btn" data-act="grRegistrar" data-id="rango">Registrar rango</button>':''}</div><div class="tbl-wrap"><table><thead><tr><th>ID / código</th><th>Descripción original</th><th>Resultado</th><th>Ubicación</th><th>Conservación</th></tr></thead><tbody>${g.items.map(b=>{const d=datoGrupo(b,t);return `<tr><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.idEtq??b.codigo)}</button></td><td>${esc(b.nombre)}</td><td>${esc(d.r)}</td><td>${esc(d.u)}</td><td>${esc(d.estado)}</td></tr>`;}).join('')}</tbody></table></div><h3>Historial del grupo</h3>${hist.map(h=>`<p>${esc(fmtDT(h.fecha))} · ${esc(who(h.u))} · ${esc(h.accion||'Actualización de fichas en lote')} · ${(h.ids||h.prev||[]).length} bienes${h.prev&&h.tipo==='Actualización de bienes iguales'?` · ${esc(h.estado)}${igualesReversibles(h.id).length?` <button class="btn sm ro-hide" data-act="igRevertir" data-id="${esc(h.id)}">Revertir lote…</button>`:''}`:''}</p>`).join('')||'<p>Sin cambios manuales.</p>'}</div><div class="m-f"><button class="btn" data-act="grExportar" data-id="uno">Exportar este grupo a Excel</button><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();aplicarPermisos();}
+function igualesPanel(key){S.igKey=key;const g=igualesActual(),t=grupoContexto();if(!g)return toast('El grupo cambió. Actualiza la vista.');const ids=new Set(g.items.map(b=>b.id)),hist=Object.entries(S.data.config).map(([id,x])=>({id,...x})).filter(x=>x.tipo==='Edición de grupo'&&(x.grupos||[]).includes(key)||x.tipo==='Actualización de bienes iguales'&&x.prev?.some(b=>ids.has(b.id))).sort((a,b)=>ordenFecha(b.fecha)-ordenFecha(a.fecha));const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(g.nombre)}</h2><button class="btn ghost" data-act="closeModal">✕</button></div><div class="m-b" style="display:block"><p>Agrupador: <b>${esc(agrupadorGrupo(g))}</b></p><p>${g.items.length} bienes · ${g.ver} verificados · ${g.pend} pendientes · IDs ${esc(igIds(g.items)||'sin ID')}</p><div class="row ro-hide"><button class="btn" data-act="grAgrupador" data-id="grupo">Cambiar agrupador</button><button class="btn" data-act="grEditar" data-id="renombrar">Renombrar</button><button class="btn" data-act="grEditar" data-id="unir">Unir grupos</button><button class="btn" data-act="grEditar" data-id="separar">Separar bienes</button><button class="btn" data-act="grEditar" data-id="mover">Mover a otro grupo</button><button class="btn" data-act="igLote">Actualizar ubicación, conservación o custodio</button>${t?.estado==='abierta'?`<button class="btn" data-act="grRegistrar" data-id="encontrados">Encontrados (${pendientesGrupo(g,t).length})</button><button class="btn" data-act="grRegistrar" data-id="cantidad">Registrar cantidad…</button><button class="btn" data-act="grRegistrar" data-id="rango">Registrar rango</button>`:''}</div><div class="tbl-wrap"><table><thead><tr><th>ID / código</th><th>Descripción original</th><th>Resultado</th><th>Ubicación</th><th>Conservación</th></tr></thead><tbody>${g.items.map(b=>{const d=datoGrupo(b,t);return `<tr><td><button class="btn link" data-act="igFicha" data-id="${esc(b.id)}">${esc(b.idEtq??b.codigo)}</button></td><td>${esc(b.nombre)}</td><td>${esc(d.r)}</td><td>${esc(d.u)}</td><td>${esc(d.estado)}</td></tr>`;}).join('')}</tbody></table></div><h3>Historial del grupo</h3>${hist.map(h=>`<p>${esc(fmtDT(h.fecha))} · ${esc(who(h.u))} · ${esc(h.accion||'Actualización de fichas en lote')} · ${(h.ids||h.prev||[]).length} bienes${h.prev&&h.tipo==='Actualización de bienes iguales'?` · ${esc(h.estado)}${igualesReversibles(h.id).length?` <button class="btn sm ro-hide" data-act="igRevertir" data-id="${esc(h.id)}">Revertir lote…</button>`:''}`:''}</p>`).join('')||'<p>Sin cambios manuales.</p>'}</div><div class="m-f"><button class="btn" data-act="grExportar" data-id="uno">Exportar este grupo a Excel</button><button class="btn" data-act="closeModal">Listo</button></div>`;if(!m.open)m.showModal();aplicarPermisos();}
 function seleccionarBienes(txt){const M=new Map();for(const token of String(txt).split(',').map(x=>x.trim()).filter(Boolean)){const b=bienes().find(b=>codigoTomaKey(b.codigo||b.id)===codigoTomaKey(token));if(b)M.set(b.id,b);else{const r=analizarRangos(token);if(r.inexistentes.length)throw new Error('IDs inexistentes: '+rangoIds(r.inexistentes));r.bienes.forEach(b=>M.set(b.id,b));}}if(!M.size)throw new Error('Selecciona al menos un bien.');return [...M.values()];}
 async function editarGrupoConfirmado(plan){exigirEscritura();const eventId='grupo-evento-'+uid();return transaccionCR(['config/gruposBienes','config/'+eventId,'config/agrupadores'],([actual,,agr])=>{if(firmaDatos(actual)!==plan.firma)throw new Error('Otro usuario cambió los grupos. Revisa otra vez.');
  // Al separar bienes, el grupo nuevo conserva el agrupador editado del grupo de origen.
  const heredar=plan.accion==='separar'&&agr?.porGrupo?.[plan.origen]&&!agr.porGrupo[plan.destino],agrNuevo=heredar?{...agr,porGrupo:{...agr.porGrupo,[plan.destino]:agr.porGrupo[plan.origen]},revision:(agr.revision||0)+1}:null;const cfg=structuredClone(actual||{nombres:{},asignaciones:{}});cfg.nombres??={};cfg.asignaciones??={};if(plan.nombre)cfg.nombres[plan.destino]=plan.nombre;for(const id of plan.ids)cfg.asignaciones[id]=plan.destino;cfg.revision=(cfg.revision||0)+1;const evento={tipo:'Edición de grupo',accion:plan.accion,fecha:nowIso(),u:S.me,ids:plan.afectados||plan.ids,grupos:[plan.origen,plan.destino],prev:actual||null,nuevo:cfg};if(new Blob([JSON.stringify(evento)]).size>800000)throw new Error('Divide la edición en grupos más pequeños.');return {writes:[['config/gruposBienes',cfg],['config/'+eventId,evento],...(agrNuevo?[['config/agrupadores',agrNuevo]]:[])]};});}
 function editarGrupoModal(accion){exigirEscritura();const g=igualesActual();if(!g)return;const global=gruposBienes(bienes(),null).find(x=>x.key===g.key),G=gruposBienes(bienes(),null).filter(x=>x.key!==g.key);openForm({title:{renombrar:'Renombrar grupo',unir:'Unir grupos',separar:'Separar bienes',mover:'Mover bienes de grupo'}[accion],note:`${esc(g.nombre)}. Las descripciones originales no cambian.`,fields:[...(accion==='renombrar'||accion==='separar'?[{k:'nombre',l:'Nombre del grupo',v:accion==='renombrar'?g.nombre:'',req:true,full:true}]:[]),...(accion==='unir'||accion==='mover'?[{k:'destino',l:'Grupo de destino',t:'select',opts:[['','Elige un grupo'],...G.map(x=>[x.key,x.nombre])],req:true,full:true}]:[]),...(accion==='separar'||accion==='mover'?[{k:'ids',l:'IDs, rangos o códigos ADM',v:g.items.map(b=>b.idEtq??b.codigo).join(', '),req:true,full:true}]:[])],ok:'Ver vista previa',submit:async v=>{let L=global.items;if(accion==='separar'||accion==='mover'){try{L=seleccionarBienes(v.ids);}catch(e){return {error:e.message};}if(L.some(b=>grupoId(b)!==g.key))return {error:'La selección incluye bienes de otro grupo.'};}const destino=accion==='renombrar'?g.key:accion==='separar'?'manual:'+uid():v.destino,plan={accion,origen:g.key,destino,nombre:v.nombre||'',ids:accion==='renombrar'?[]:L.map(b=>b.id),afectados:L.map(b=>b.id),firma:firmaDatos(S.data.config.gruposBienes||null)};openForm({title:'Vista previa del grupo',note:`${esc(accion)}: <b>${esc(g.nombre)}</b> → <b>${esc(v.nombre||grupoNombre(destino))}</b><p>${L.length} bienes: ${esc(L.map(b=>b.idEtq??b.codigo).join(', '))}</p><p>Se conserva cada descripción, ID, CR y conteo. El cambio quedará en el historial.</p>`,fields:[],ok:'Aplicar cambio de grupo',submit:async()=>{await editarGrupoConfirmado(plan);toast('Grupo actualizado.');render();}});return {keep:true};}});}
-function grupoRegistrar(modo){const g=igualesActual(),t=grupoContexto();if(!g||!t||t.estado!=='abierta')return;S.tomaSel=t.id;const pend=g.items.filter(b=>!conteos(t.id)[b.id]&&b.idEtq!=null&&(!esAnual(t)||estadoCR(t,crFijo(t,b.id))==='abierta'));if(!pend.length)return toast('No hay etiquetas pendientes en CR abiertos.');if(!S.here.piso&&!S.here.ambiente)return toast('Elige primero «Dónde estoy» en la toma.');if(modo==='cantidad')openForm({title:'Registrar cantidad del grupo',fields:[{k:'n',l:'Cantidad de bienes',t:'number',v:pend.length,req:true}],ok:'Ver IDs propuestos',submit:async v=>{if(!Number.isInteger(v.n)||v.n<1||v.n>pend.length)return {error:'Cantidad fuera del grupo pendiente.'};setTimeout(()=>registrarIDsModal(rangoIds(pend.sort((a,b)=>a.idEtq-b.idEtq).slice(0,v.n).map(b=>b.idEtq)),undefined,undefined,g.items.map(b=>b.id)),0);}});else registrarIDsModal(igIds(pend),undefined,undefined,g.items.map(b=>b.id));}
+function pendientesGrupo(g,t){return g.items.filter(b=>!conteos(t.id)[b.id]&&b.idEtq!=null&&(!esAnual(t)||estadoCR(t,crFijo(t,b.id))==='abierta'));}
+function grupoRegistrar(modo){exigirEscritura();const g=igualesActual(),t=grupoContexto();if(!g||!t||t.estado!=='abierta')return;S.tomaSel=t.id;const pend=pendientesGrupo(g,t);if(!pend.length)return toast('No hay etiquetas pendientes en CR abiertos.');if(!S.here.piso&&!S.here.ambiente)return toast('Elige primero «Dónde estoy» en la toma.');if(modo==='cantidad')openForm({title:'Registrar cantidad del grupo',fields:[{k:'n',l:'Cantidad de bienes',t:'number',v:pend.length,req:true}],ok:'Ver IDs propuestos',submit:async v=>{if(!Number.isInteger(v.n)||v.n<1||v.n>pend.length)return {error:'Cantidad fuera del grupo pendiente.'};setTimeout(()=>registrarIDsModal(rangoIds(pend.sort((a,b)=>a.idEtq-b.idEtq).slice(0,v.n).map(b=>b.idEtq)),undefined,undefined,g.items.map(b=>b.id)),0);}});else registrarIDsModal(igIds(pend),undefined,undefined,g.items.map(b=>b.id));}
 
 document.addEventListener('change',e=>{const k={'gr-agr':'grAgr','gr-tipo':'grTipo','gr-cr':'grCR','gr-toma':'grToma'}[e.target.id];if(k){S[k]=e.target.value;render();}});
 document.addEventListener('input',e=>{if(e.target.id==='gr-q'){S.grQ=e.target.value;render();}});
@@ -1146,10 +1147,13 @@ function hereUbic(){ const P=planos().filter(x=>x.marco); if(!P.length||S.hManua
 function vToma(id){
   const t={id,...S.data.tomas[id]}; const anual=esAnual(t); const open=t.estado==='abierta'; const C=conteos(id); const p=anual&&S.anCR?avanceCR(t,S.anCR):tomaProg(t);
   const espSet=new Set(t.esperados||[]),indiceContable=indiceCodigosContables();
+  const dudasAbiertas=dudasToma(id,'abierta'),bienesConDuda=new Set(dudasAbiertas.map(d=>d.bienId));
   let L=[...(t.esperados||[]), ...Object.keys(C).filter(k=>!espSet.has(k))].map(bid=>({id:bid, b:anual?{id:bid,...S.data.bienes[bid],crToma:crFijo(t,bid),crTomaNombre:nombreCR(crFijo(t,bid)).split(' — ').slice(1).join(' — ')}:{id:bid,...S.data.bienes[bid]}, c:C[bid], fuera:!espSet.has(bid)}));
   if(anual&&S.anCR)L=L.filter(x=>crFijo(t,x.id)===S.anCR);
   const resOf = x => resultadoToma(t,x.id,C);
+  const AGR=new Map();for(const bid of t.esperados||[]){const b=S.data.bienes[bid];if(b){const a=agrupador({id:bid,...b});AGR.set(a,(AGR.get(a)||0)+1);}}
   const L0=L; const CRS=[...new Set(L0.map(x=>crDe(x.b)))].sort((a,b)=>crOrden(a)-crOrden(b)||crNum(a)-crNum(b)||a.localeCompare(b));
+  if(S.tAgr)L=L.filter(x=>agrupador(x.b)===S.tAgr);
   if(S.tCR) L=L.filter(x=>crDe(x.b)===S.tCR);
   if(S.tPrioridad)L=L.filter(x=>String(x.b.prioridadCR)===S.tPrioridad);
   if(S.tActivoFiltro)L=L.filter(x=>grupoId(x.b)===S.tActivoFiltro);
@@ -1163,7 +1167,7 @@ function vToma(id){
   const rowOf=x=>{ const b=x.b; const c=x.c; const r=resOf(x);
     const det = c ? `<div class="small">${esc(ubic(c)||'—')}${cuadDe(c)?' · '+esc(cuadDe(c)):''}${c.cu?' · '+esc(c.cu):''}</div><div class="row" style="gap:4px;margin-top:2px">${condChip(c.c)}${operChip(c.o)}${c.cant&&c.cant!=1?chip('Cant. '+c.cant,'nodot'):''}</div>${c.obs?`<div class="small muted">${esc(c.obs)}</div>`:''}<div class="small muted">Registrado por ${esc(nameOf(c.u)||'Registro inicial')}</div>` : '';
     const acts = (!open||(anual&&estadoCR(t,crFijo(t,x.id))!=='abierta')) ? '' : c ? `<button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Editar</button><button class="btn sm ghost ro-hide" data-act="tQuitar" data-id="${esc(x.id)}" title="Volver a pendiente">Quitar</button>` : `<button class="btn sm ro-hide" data-act="tRapido" data-id="${esc(x.id)}" title="Registrar con el ambiente y estado fijados arriba">Encontrado</button><button class="btn sm ro-hide" data-act="tDetalle" data-id="${esc(x.id)}">Detalle…</button><button class="btn sm ghost ro-hide" data-act="tNoLoc" data-id="${esc(x.id)}">No localizado</button>`;
-    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(anual?nombreCR(crFijo(t,x.id)):b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${esRegistroDuplicado(b)?chip(REGISTRO_DUPLICADO,'c-warn'):''}${paresCodigo(x.id,b,null,indiceContable).length?chip(CODIGO_COMPARTIDO,'c-warn'):''}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}</div></td></tr>`; };
+    return `<tr class="${c&&c.r!=='No localizado'?'found':''}"><td class="mono grow">${b.idEtq!=null?`<b>ID ${esc(b.idEtq)}</b><br>`:''}${esc(b.codigo||'—')}${b.codCont?`<div class="small muted">${esc(b.codCont)}</div>`:''}</td><td class="w"><div class="nm">${esc(b.nombre||'Bien eliminado')}</div><div class="small muted">${esc([b.marca,b.modelo].filter(Boolean).join(' '))}${b.serie?` · S/N <span class="mono">${esc(b.serie)}</span>`:''}${b.refDoc?` · Ref.: ${esc(b.refDoc)}`:''}${x.fuera?' · <b>fuera del alcance</b>':''}</div></td><td class="hide-sm">${esc(anual?nombreCR(crFijo(t,x.id)):b.area||'')}</td><td class="w">${chip(r,RES_C[r]??'')}${bienesConDuda.has(x.id)?chip('Duda abierta','c-warn'):''}${esRegistroDuplicado(b)?chip(REGISTRO_DUPLICADO,'c-warn'):''}${paresCodigo(x.id,b,null,indiceContable).length?chip(CODIGO_COMPARTIDO,'c-warn'):''}${det}</td><td class="w acts"><div class="row" style="gap:4px">${acts}${open?`<button class="btn sm ro-hide" data-act="tDuda" data-id="${esc(x.id)}">Tengo una duda</button>`:''}</div></td></tr>`; };
   const rows=shown.map(rowOf).join('');
   const sob=(t.sobrantes||[]).filter(s=>!anual||!S.anCR||(s.cr||SIN_CR)===S.anCR);
   const tf=[['pendientes','Por verificar'],['verificados','Verificados'],['conciliar','Por conciliar'],['todos','Todos']].map(([k,l])=>`<button data-act="tf" data-tf="${k}" aria-pressed="${S.tf===k}">${l} <span class="num">${cnt[k]}</span></button>`).join('');
@@ -1176,6 +1180,7 @@ function vToma(id){
   ${(()=>{ const n=open?fichasCierreInterrumpido(t).length:0; return n?`<div class="banner warn"><span class="grow"><b>Un cierre se interrumpió:</b> ${n} fichas quedaron con el resultado de esta toma (por ejemplo «No localizado») aunque la toma sigue abierta.</span><button class="btn sm primary ro-hide" data-act="tRevertir">Revertir esas fichas</button></div>`:''; })()}
   ${anual?anualHtml(t):''}
   ${actividadHtml(id)}
+  <p><button class="btn" data-act="tDudas">Dudas abiertas (${dudasAbiertas.length})</button></p>
   <div class="card" style="display:grid;gap:10px"><div class="row between small"><span><b class="num">${p.ver??p.ok}</b> de <span class="num">${p.tot}</span> verificados · <span class="num">${p.enc}</span> encontrados · <span class="num">${p.conc}</span> por conciliar · <span class="num">${p.nol}</span> no localizados · <span class="num">${sob.length}</span> sobrantes</span><span class="num">${p.tot?Math.round((p.ver??p.ok)/p.tot*100):0}%</span></div><div class="progress"><i style="width:${p.tot?(p.ver??p.ok)/p.tot*100:0}%"></i></div></div>
   ${open?`<div class="tomagrid ro-hide">
    <div class="card herecard"><details class="herebox" ${(S.hereOpen??!(H.piso||H.ambiente))?'open':''}><summary><span class="hs-l"><b>1. Dónde estoy</b></span><span class="hs-e">Cambiar</span><span style="flex-basis:100%"></span><b id="hs-v" class="hs-v">${esc(hereLugar())}</b></summary><p class="hint" style="margin:10px 0">Se aplica a cada bien que registres. Si un bien está en otro lugar, usa «Detalle…».</p>
@@ -1194,10 +1199,10 @@ function vToma(id){
       <div class="fld"><label for="h-cu">Custodio / usuario</label><input class="inp" id="h-cu" data-here="cu" data-sug="responsable" autocomplete="off" value="${esc(H.cu)}" placeholder="Vacío = se mantiene el registrado"><div class="sug" hidden></div></div>
     </div></details></div>
   </div>`:''}
-  ${(()=>{ const nF=[S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; const lista=S.tView!=='plano'&&S.tGroup!=='grupos'; const fo=S.tFilt??(nF>0);
+  ${(()=>{ const nF=[S.tAgr,S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; const lista=S.tView!=='plano'; const fo=S.tFilt??(nF>0);
   return `<div class="filters revbar"><span class="lbl">Revisar</span>${lista?`<div class="seg" role="group" aria-label="Filtrar">${tf}</div><button class="btn ${fo?'on':''}" data-act="tFiltros" aria-expanded="${!!fo}">Filtros${nF?` <span class="badge acc">${nF}</span>`:''}</button>`:''}${S.tAmb&&lista?`<button class="fchip" data-act="tAmbQuitar">Ambiente: ${esc(ambDe(S.tAmb)?.a.nombre||'—')} <span aria-hidden="true">✕</span></button>`:''}<div class="seg" role="group" aria-label="Vista" style="margin-left:auto"><button data-act="grVer" data-id="lista" aria-pressed="${S.tView!=='plano'&&S.tGroup!=='grupos'}">Lista</button><button data-act="grVer" data-id="grupos" aria-pressed="${S.tGroup==='grupos'&&S.tView!=='plano'}">Grupos de bienes</button><button data-act="tVista" data-v="plano" aria-pressed="${S.tView==='plano'}">Plano</button></div></div>
-  ${lista&&fo?`<div class="filters more"><input class="inp search" id="tq" type="search" placeholder="Buscar en esta toma: ID, código o descripción" value="${esc(S.tq)}" aria-label="Buscar en esta toma"><select class="inp" id="t-prioridad" aria-label="Prioridad CR"><option value="">Todas las prioridades CR</option>${[...new Set(L0.map(x=>x.b.prioridadCR).filter(v=>v!=null))].sort((a,b)=>a-b).map(n=>`<option value="${n}" ${String(n)===S.tPrioridad?'selected':''}>Prioridad ${n}</option>`).join('')}</select><select class="inp" id="t-activo" aria-label="Filtrar por grupo de bienes"><option value="">Todos los grupos de bienes</option>${[...new Set(L0.map(x=>grupoId(x.b)))].sort((a,b)=>grupoNombre(a).localeCompare(grupoNombre(b),'es')).map(k=>`<option value="${esc(k)}" ${k===S.tActivoFiltro?'selected':''}>${esc(grupoNombre(k))}</option>`).join('')}</select><select class="inp" id="t-cr" aria-label="Filtrar por CR"><option value="">Todos los CR</option>${CRS.map(c=>`<option value="${esc(c)}" ${S.tCR===c?'selected':''}>${esc(c)}</option>`).join('')}</select>${nF?`<button class="btn sm ghost" data-act="tLimpiarF">Limpiar filtros</button>`:''}</div>`:''}`; })()}
-  ${S.tView==='plano'?vTomaPlano(t,C):S.tGroup==='grupos'?gruposVista(L0.map(x=>({id:x.id,...x.b})),t):tablaHtml}
+  ${lista&&fo?`<div class="filters more"><input class="inp search" id="tq" type="search" placeholder="Buscar en esta toma: ID, código o descripción" value="${esc(S.tq)}" aria-label="Buscar en esta toma"><label class="fld">Agrupador<select class="inp" id="t-agr" aria-label="Agrupador de la toma"><option value="">Todos</option>${[...AGR].sort((a,b)=>a[0].localeCompare(b[0],'es')).map(([a,n])=>`<option value="${esc(a)}" ${S.tAgr===a?'selected':''}>${esc(a)} (${n})</option>`).join('')}</select></label><select class="inp" id="t-prioridad" aria-label="Prioridad CR"><option value="">Todas las prioridades CR</option>${[...new Set(L0.map(x=>x.b.prioridadCR).filter(v=>v!=null))].sort((a,b)=>a-b).map(n=>`<option value="${n}" ${String(n)===S.tPrioridad?'selected':''}>Prioridad ${n}</option>`).join('')}</select><select class="inp" id="t-activo" aria-label="Filtrar por grupo de bienes"><option value="">Todos los grupos de bienes</option>${[...new Set(L0.map(x=>grupoId(x.b)))].sort((a,b)=>grupoNombre(a).localeCompare(grupoNombre(b),'es')).map(k=>`<option value="${esc(k)}" ${k===S.tActivoFiltro?'selected':''}>${esc(grupoNombre(k))}</option>`).join('')}</select><select class="inp" id="t-cr" aria-label="Filtrar por CR"><option value="">Todos los CR</option>${CRS.map(c=>`<option value="${esc(c)}" ${S.tCR===c?'selected':''}>${esc(c)}</option>`).join('')}</select>${nF?`<button class="btn sm ghost" data-act="tLimpiarF">Limpiar filtros</button>`:''}</div>`:''}`; })()}
+  ${S.tView==='plano'?vTomaPlano(t,C):S.tGroup==='grupos'?gruposVista(L.map(x=>({id:x.id,...x.b})),t):tablaHtml}
   ${anual?sobAnualHtml(t):`<div class="card"><div class="card-h"><h3>Sobrantes</h3>${open?`<button class="btn sm ro-hide" data-act="tSobrante">Agregar sobrante</button>`:''}</div><p class="small muted" style="margin:0 0 8px">Bienes encontrados físicamente que no figuran en el registro.</p>${sob.length?`<div class="list">${sob.map((s,i)=>`<div class="li"><div class="grow"><div class="t">${esc(s.d)}${s.cant>1?` <span class="muted">× ${s.cant}</span>`:''}</div><div class="small muted">${esc([s.marca,s.modelo,s.serie&&'S/N '+s.serie].filter(Boolean).join(' · '))}${s.marca||s.modelo||s.serie?' · ':''}${esc(s.ub||'')}${s.nota?' · '+esc(s.nota):''}</div></div>${open?`<button class="btn sm ghost ro-hide" data-act="tSobDel" data-i="${i}">Quitar</button>`:`${s.reg?chip('Registrado','c-ok'):`<button class="btn sm ro-hide" data-act="tSobReg" data-i="${i}">Registrar como bien</button>`}`}</div>`).join('')}</div>`:`<div class="empty small">Sin sobrantes.</div>`}</div>`}`;
 }
 
@@ -1232,7 +1237,7 @@ function renderDrawer(){
   A.push(['editar','Editar ficha','']);if(S.admin)A.push(['registroDuplicado',b.registroDuplicado?.activo?'Desmarcar registro duplicado':'Marcar como registro duplicado','']);
   const prim=A.find(x=>x[2]==='primary'); const rest=A.filter(x=>x!==prim);
   const btn=([k,l,c],cls='')=>`<button class="btn sm ${c} ${cls}" data-act="${k}" data-id="${esc(id)}">${l}</button>`;
-  const actions=`<div class="row ro-hide">${prim?btn(prim):''}${rest.length?`<details class="menu right"><summary class="btn sm">Más acciones <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${rest.map(x=>`<button class="mi ${x[2]==='danger'?'danger':''}" role="menuitem" data-act="${x[0]}" data-id="${esc(id)}">${x[1]}</button>`).join('')}</div></details>`:''}</div>`;
+  const actions=`<div class="row ro-hide">${tomasDuda(id).length?`<button class="btn sm" data-act="tDudaFicha" data-id="${esc(id)}">Tengo una duda</button>`:''}${prim?btn(prim):''}${rest.length?`<details class="menu right"><summary class="btn sm">Más acciones <span aria-hidden="true">▾</span></summary><div class="menu-list" role="menu">${rest.map(x=>`<button class="mi ${x[2]==='danger'?'danger':''}" role="menuitem" data-act="${x[0]}" data-id="${esc(id)}">${x[1]}</button>`).join('')}</div></details>`:''}</div>`;
   const M=mants().filter(m=>m.bienId===id).sort((a,b)=>(b.fechaReal||b.fechaProg||'').localeCompare(a.fechaReal||a.fechaProg||''));
   const kv=(k,v,mono,full)=>v? `<div ${full?'style="grid-column:1/-1"':''}><dt>${k}</dt><dd class="${mono?'mono':''}">${esc(v)}</dd></div>` : '';
   const hist=[...(b.hist||[])].reverse(); const histShown=S.histAll?hist:hist.slice(0,5);
@@ -1377,8 +1382,8 @@ const ACT = {
       submit:async v=>{ const [k,...rest]=(v.alcance||'').split(':'); const val=rest.join(':'); const fld={area:'area',sede:'sede',grupo:'categoria'}[k];
         const esp=bienes().filter(b=>ACTIVOS.includes(b.etapa) && (!fld || (b[fld]||'')===val)).sort((a,b)=>(a.codigo||'').localeCompare(b.codigo||'','es',{numeric:true})).map(b=>b.id); if(!esp.length) return {error:'No hay bienes en uso con ese alcance.'};
         const nombre=v.nombre || `Toma física ${mes}${val?' · '+val:''}`;
-        const id=uid(); await put('tomas',id,{nombre,alcance:v.alcance,estado:'abierta',creado:nowIso(),u:S.me||null,esperados:esp,sobrantes:[]}); S.tomaSel=id; S.tf='pendientes'; S.tq=''; S.tlim=PAGE; location.hash='inventario'; render(); toast(`Toma creada con ${esp.length} bienes por verificar.`); } }); },
-  openToma(id){ S.tGroup='';S.tPrioridad='';S.tActivoFiltro='';S.scanQ=''; S.tomaSel=id; S.tq=''; S.tlim=PAGE; S.tf= S.data.tomas[id]?.estado==='abierta'?'pendientes':'todos'; ensureSubs(); if(S.view!=='inventario'){ location.hash='inventario'; } render(); window.scrollTo(0,0); },
+        const id=uid(); await put('tomas',id,{nombre,alcance:v.alcance,estado:'abierta',creado:nowIso(),u:S.me||null,esperados:esp,sobrantes:[]}); S.tomaSel=id; S.tAgr=''; S.tf='pendientes'; S.tq=''; S.tlim=PAGE; location.hash='inventario'; render(); toast(`Toma creada con ${esp.length} bienes por verificar.`); } }); },
+  openToma(id){ S.tGroup='';S.tAgr='';S.tPrioridad='';S.tActivoFiltro='';S.scanQ=''; S.tomaSel=id; S.tq=''; S.tlim=PAGE; S.tf= S.data.tomas[id]?.estado==='abierta'?'pendientes':'todos'; ensureSubs(); if(S.view!=='inventario'){ location.hash='inventario'; } render(); window.scrollTo(0,0); },
   tVolver(){ S.tomaSel=null; render(); },
   tRapido(bid){ return marcar(bid); },
   tNoLoc(bid){ const tid=S.tomaSel; openForm({title:'Marcar como no localizado', fields:[{k:'obs',l:'Observaciones de campo',t:'textarea',full:true,ph:'Dónde se buscó, a quién se consultó…'}], ok:'Marcar no localizado', submit:async v=>{ const r=await guardarConteoUI(tid,bid,{r:'No localizado',obs:v.obs,u:S.me||null,t:nowIso()});if(!r)return {keep:true}; } }); },
@@ -1933,7 +1938,7 @@ async function respaldarTomaEliminada(t,C){
   if(new Blob([datos]).size>900000){await guardarArchivo(nombre,new Blob([datos],{type:'application/json'}));return {archivo:nombre};}
   await put('config',id,{tipo:'Respaldo antes de eliminar toma',formato:'json',fecha:nowIso(),tomaId:t.id,nombre:t.nombre||'',conteos:Object.keys(C).length,datos});return {id};
 }
-Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
+Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
     cols.forEach(c=>{ out.colecciones[c]=structuredClone(S.data[c]||{}); });
     Object.keys(S.data.tomas||{}).forEach(id=>{ out.colecciones[`tomas/${id}/conteos`]=structuredClone(conteos(id)||{}); });
     for(const [tid,t]of Object.entries(S.data.tomas||{})){if(!esAnual(t))continue;const path=`tomas/${tid}/actasCR`;out.colecciones[path]=await coleccionCR(path);for(const op of Object.keys(out.colecciones[path]))out.colecciones[`${path}/${op}/filas`]=await coleccionCR(`${path}/${op}/filas`);}
@@ -2151,10 +2156,10 @@ async function scan(code){exigirEscritura();const crudo=String(code||'').trim();
  if(!S.here.piso&&!S.here.ambiente){toast('Elige primero la ubicación en «Contando en».');return false;}
  const d=await marcar(b.id,true);if(!d)return false;toast(`ID ${b.idEtq||b.codigo}: ${b.nombre}, encontrado.`);return true;
 }
-document.addEventListener('change',e=>{if(e.target.id==='b-orden'){S.bOrden=e.target.value;S.lim=PAGE;render();}if(e.target.id==='t-prioridad'){S.tPrioridad=e.target.value;render();}if(e.target.id==='t-activo'){S.tActivoFiltro=e.target.value;render();}});
+document.addEventListener('change',e=>{if(e.target.id==='b-orden'){S.bOrden=e.target.value;S.lim=PAGE;render();}if(e.target.id==='t-agr'){S.tAgr=e.target.value;S.tlim=PAGE;render();}if(e.target.id==='t-prioridad'){S.tPrioridad=e.target.value;render();}if(e.target.id==='t-activo'){S.tActivoFiltro=e.target.value;render();}});
 Object.assign(ACT,{tRegistrarIDs(){if(!S.here.piso&&!S.here.ambiente){toast('Elige primero «Dónde estoy».');S.hereOpen=true;render();return;}registrarIDsModal();},
-  tFiltros(){ const nF=[S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; S.tFilt=!(S.tFilt??(nF>0)); render(); },
-  tLimpiarF(){ S.tPrioridad='';S.tActivoFiltro='';S.tCR='';S.tq='';S.tlim=PAGE; render(); },
+  tFiltros(){ const nF=[S.tAgr,S.tPrioridad,S.tActivoFiltro,S.tCR,S.tq].filter(Boolean).length; S.tFilt=!(S.tFilt??(nF>0)); render(); },
+  tLimpiarF(){ S.tAgr='';S.tPrioridad='';S.tActivoFiltro='';S.tCR='';S.tq='';S.tlim=PAGE; render(); },
   hListo(){ S.hereOpen=false; render(); }});
 document.addEventListener('toggle',e=>{ if(e.target.classList&&e.target.classList.contains('regopts')) S.regOpen=e.target.open; },true);
 
@@ -2701,7 +2706,7 @@ Object.assign(ACT,{
 });
 
 
-const RO_OK=['grExportar','grVer','exportarTodoExcel','igVista','igAbrir','igFicha','plOpen','plVolver','tVista','ambFiltro','tAmbQuitar','moreF','clrF','histAll','openSis','sVolver','openBien','closeBien','closeModal','goBienes','goMant','go','mf','tf','openToma','tVolver','copiarBienes','tCopiar','masBienes','masToma','tFiltros','tLimpiarF','tExcelConsol','tExcelPlantilla','tExcelZebra'];
+const RO_OK=['tDudas','grExportar','grVer','exportarTodoExcel','igVista','igAbrir','igFicha','plOpen','plVolver','tVista','ambFiltro','tAmbQuitar','moreF','clrF','histAll','openSis','sVolver','openBien','closeBien','closeModal','goBienes','goMant','go','mf','tf','openToma','tVolver','copiarBienes','tCopiar','masBienes','masToma','tFiltros','tLimpiarF','tExcelConsol','tExcelPlantilla','tExcelZebra'];
 document.addEventListener('click', e=>{
   const el=e.target.closest('[data-act]'); if(!el) return;
   const a=el.dataset.act; if(!ACT[a]) return;
@@ -3066,7 +3071,7 @@ document.addEventListener('change',e=>{if(e.target.id!=='tb-fam')return;S.tbFam=
 const ES_MOVIL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini/i.test(navigator.userAgent) || (matchMedia('(pointer:coarse)').matches && !matchMedia('(any-pointer:fine)').matches);
 const LOCAL = /[?&]local\b/.test(location.search);
 let FS=null, AUTH=null; S.admin=false; S.usuarios={};
-const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien'];
+const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas'];
 const PATH_OK = p => COLS.includes(p) || /^tomas\/[^/]+\/conteos$/.test(p);
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 const LOGO='<svg width="40" height="40" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="6" fill="var(--accent)"/><path d="M8 9h12M8 14h12M8 19h7" stroke="var(--accent-ink)" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="19" r="2" fill="var(--accent-ink)"/></svg>';
@@ -3372,10 +3377,11 @@ Object.assign(ACT,{
  anTodos(){S.anCR=null;S.tCR='';S.tPrioridad='';S.tActivoFiltro='';S.tq='';S.tAmb='';S.tf='todos';render();},
  anConciliar(cr){$('#modal').close();ACT.anVer(cr);S.tf='conciliar';S.tView='lista';render();},
  async anCerrar(cr){
-  exigirAdmin();const t=await refrescarTomaCR(S.tomaSel);if(DB)await coleccionCR('bienes');const p=avanceCR(t,cr),bloqueados=idsCR(t,cr).filter(id=>conteos(t.id)[id]?.r==='Por conciliar'&&!esRegistroDuplicado(S.data.bienes[id])).length,huella=huellaCierreCR(t,cr),revision=await cambiosPosterioresCR(t,cr),otros=usuariosRecientes(t.id,Date.now(),cr).filter(x=>x.u!==S.me);
-  const note=`${revision.cambios.length?`<p class="err">${revision.cambios.length} fichas cambiaron después del acta anterior: ${revision.cambios.map(x=>esc(x.etiqueta?'ID '+x.etiqueta:x.codigo)+(x.otraToma?' (cierre en otra toma)':'')).join(', ')}. Revisa las fichas antes de aplicar este cierre.</p>`:''}<b>${esc(nombreCR(cr))}</b><p>${p.tot} bienes del CR · ${p.enc} encontrados · ${p.conc} por conciliar · ${p.nol} no localizados · ${p.pend} pendientes.</p><p><b>${p.pend} pendientes pasarán a «No localizado».</b> Se actualizarán únicamente las ${p.tot} fichas de este CR.</p><p>Bienes de otros CR (no se tocan): <b>${(t.esperados||[]).length-p.tot}</b>.</p><button type="button" class="btn link" data-act="anConciliar" data-id="${esc(cr)}">Ver por conciliar</button>${bloqueados?'<p class="err">Resuelve los bienes por conciliar antes de cerrar.</p>':''}${p.conc>bloqueados?`<p>${p.conc-bloqueados} registros duplicados quedarán Por conciliar y se incluirán en Hallazgos con propuesta de baja como duplicado.</p>`:''}${otros.length?`<p class="err">Actividad reciente en este CR: ${otros.map(x=>esc(who(x.u))).join(', ')}. Coordina antes de cerrar.</p>`:''}<p>Se generará el Excel de este CR: Acta, Detalle y Hallazgos, incluidos sus sobrantes y los valores histórico y neto totales de sus no localizados.</p>`;
-  openForm({title:'Cerrar CR',note,danger:true,ok:bloqueados?'Resolver por conciliar':'Cerrar CR y descargar acta',fields:bloqueados?[]:[...(revision.cambios.length?[{k:'cambios',l:'Cambios posteriores al acta anterior',t:'select',opts:[['','Revisar primero'],['si','Revisé las fichas; aplicar los resultados de este cierre']],req:true,full:true}]:[]),...(otros.length?[{k:'actividad',l:'Actividad reciente',t:'select',opts:[['','Coordinar primero'],['si','Ya coordiné; continuar']],req:true,full:true}]:[]),{k:'conf',l:`Escribe CERRAR ${cr}`,req:true,full:true}],submit:async v=>{
+  exigirAdmin();const t=await refrescarTomaCR(S.tomaSel);if(DB){await coleccionCR('bienes');await coleccionCR('dudas');}const dudas=dudasToma(t.id,'abierta',cr);const p=avanceCR(t,cr),bloqueados=idsCR(t,cr).filter(id=>conteos(t.id)[id]?.r==='Por conciliar'&&!esRegistroDuplicado(S.data.bienes[id])).length,huella=huellaCierreCR(t,cr),revision=await cambiosPosterioresCR(t,cr),otros=usuariosRecientes(t.id,Date.now(),cr).filter(x=>x.u!==S.me);
+  const note=`${dudas.length?`<p class="err"><b>Hay ${dudas.length} dudas abiertas en este CR</b></p>${dudasHtml(dudas)}`:''}${revision.cambios.length?`<p class="err">${revision.cambios.length} fichas cambiaron después del acta anterior: ${revision.cambios.map(x=>esc(x.etiqueta?'ID '+x.etiqueta:x.codigo)+(x.otraToma?' (cierre en otra toma)':'')).join(', ')}. Revisa las fichas antes de aplicar este cierre.</p>`:''}<b>${esc(nombreCR(cr))}</b><p>${p.tot} bienes del CR · ${p.enc} encontrados · ${p.conc} por conciliar · ${p.nol} no localizados · ${p.pend} pendientes.</p><p><b>${p.pend} pendientes pasarán a «No localizado».</b> Se actualizarán únicamente las ${p.tot} fichas de este CR.</p><p>Bienes de otros CR (no se tocan): <b>${(t.esperados||[]).length-p.tot}</b>.</p><button type="button" class="btn link" data-act="anConciliar" data-id="${esc(cr)}">Ver por conciliar</button>${bloqueados?'<p class="err">Resuelve los bienes por conciliar antes de cerrar.</p>':''}${p.conc>bloqueados?`<p>${p.conc-bloqueados} registros duplicados quedarán Por conciliar y se incluirán en Hallazgos con propuesta de baja como duplicado.</p>`:''}${otros.length?`<p class="err">Actividad reciente en este CR: ${otros.map(x=>esc(who(x.u))).join(', ')}. Coordina antes de cerrar.</p>`:''}<p>Se generará el Excel de este CR: Acta, Detalle y Hallazgos, incluidos sus sobrantes y los valores histórico y neto totales de sus no localizados.</p>`;
+  openForm({title:'Cerrar CR',note,danger:true,ok:bloqueados?'Resolver por conciliar':'Cerrar CR y descargar acta',fields:bloqueados?[]:[...(dudas.length?[{k:'dudas',l:'Dudas abiertas',t:'select',opts:[['','Revisar primero'],['si','Confirmo continuar con estas dudas abiertas']],req:true,full:true}]:[]),...(revision.cambios.length?[{k:'cambios',l:'Cambios posteriores al acta anterior',t:'select',opts:[['','Revisar primero'],['si','Revisé las fichas; aplicar los resultados de este cierre']],req:true,full:true}]:[]),...(otros.length?[{k:'actividad',l:'Actividad reciente',t:'select',opts:[['','Coordinar primero'],['si','Ya coordiné; continuar']],req:true,full:true}]:[]),{k:'conf',l:`Escribe CERRAR ${cr}`,req:true,full:true}],submit:async v=>{
    exigirAdmin();if(bloqueados){ACT.anConciliar(cr);return;}
+   if(dudas.length&&v.dudas!=='si')return {error:'Confirma continuar con las dudas abiertas.'};
    if(v.conf!==`CERRAR ${cr}`)return {error:`Escribe CERRAR ${cr}.`};
    const op=await comenzarCierreCR(t.id,cr,huella,otros.map(x=>x.u),revision.firmas);await ejecutarCierreCR(t.id,cr,op);
   }});
@@ -3421,6 +3427,86 @@ async function coincidenciasTomas(ids){
 
 Object.assign(ACT,{tMoverConflicto(i){const e=S.conteosConflictos?.[Number(i)];if(e)mostrarConflicto(e);}});
 Object.assign(ACT,{grAgrupador:agrupadorModal,grEditar:editarGrupoModal,grRegistrar:grupoRegistrar,grExportar:gruposExcel,grVer(id){S.tGroup=id==='grupos'?'grupos':'';S.tView='lista';render();}});
+/* F4.1: preguntas de campo independientes de fichas y conteos. */
+function dudasToma(tid,estado='',cr=''){
+ return Object.entries(S.data.dudas||{}).map(([id,d])=>({id,...d}))
+  .filter(d=>d.tomaId===tid&&(!estado||d.estado===estado)&&(!cr||d.cr===cr))
+  .sort((a,b)=>String(b.t).localeCompare(String(a.t)));
+}
+function tomasDuda(bid){
+ return tomas().filter(t=>t.estado==='abierta'&&((t.esperados||[]).includes(bid)||conteos(t.id)[bid]));
+}
+function dudasHtml(L,responder=false){
+ return `<div class="list">${L.map(d=>{
+  const b=S.data.bienes[d.bienId]||{};
+  return `<div class="li" data-duda="${esc(d.id)}"><div class="grow" style="min-width:0;overflow-wrap:anywhere">
+   <b>ID ${esc(b.idEtq??'—')} · ${esc(b.codigo||d.bienId)} · ${esc(b.nombre||'Bien eliminado')}</b>
+   <div class="small muted">${esc(nombreCR(d.cr))}</div><p style="white-space:pre-wrap">${esc(d.texto)}</p>
+   <div class="small muted">${esc(who(d.u))} · ${esc(fmtDT(d.t))}</div>
+   ${d.estado==='respondida'?`<p style="white-space:pre-wrap"><b>Respuesta:</b> ${esc(d.respuesta)}</p><div class="small muted">${esc(who(d.uResp))} · ${esc(fmtDT(d.tResp))}</div>`:chip('Duda abierta','c-warn')}
+   </div>${responder&&S.admin&&d.estado==='abierta'?`<button class="btn sm ro-hide" data-act="dResponder" data-id="${esc(d.id)}">Responder</button>`:''}</div>`;
+ }).join('')||'<p class="empty">Sin dudas en esta lista.</p>'}</div>`;
+}
+function dudasModal(tid=S.dToma||S.tomaSel){
+ S.dToma=tid;
+ const todas=dudasToma(tid),crs=[...new Set(todas.map(d=>d.cr))].sort(),m=$('#modal');
+ m.classList.add('wide');
+ m.innerHTML=`<div class="m-h"><h2>Dudas de la toma</h2><button class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div>
+  <div class="m-b" style="display:block"><div class="filters">
+   <label class="fld">Estado<select class="inp" id="d-estado"><option value="abierta" ${S.dEstado!=='respondida'?'selected':''}>Abiertas</option><option value="respondida" ${S.dEstado==='respondida'?'selected':''}>Respondidas</option></select></label>
+   <label class="fld">CR<select class="inp" id="d-cr"><option value="">Todos los CR</option>${crs.map(cr=>`<option value="${esc(cr)}" ${S.dCR===cr?'selected':''}>${esc(nombreCR(cr))}</option>`).join('')}</select></label>
+  </div>${dudasHtml(dudasToma(tid,S.dEstado||'abierta',S.dCR||''),true)}</div>
+  <div class="m-f"><button class="btn" data-act="closeModal">Listo</button></div>`;
+ if(!m.open)m.showModal();aplicarPermisos();
+}
+async function crearDuda(tid,bid,texto){
+ exigirEscritura();texto=String(texto||'').trim();
+ if(!texto||texto.length>500)throw new Error('Escribe tu duda (máximo 500 caracteres).');
+ const t=S.data.tomas[tid];
+ if(!t||!tomasDuda(bid).some(x=>x.id===tid))throw new Error('El bien debe pertenecer a una toma abierta.');
+ const id='DU-'+today()+'-'+uid();
+ await put('dudas',id,{
+  tomaId:tid,bienId:bid,cr:esAnual(t)?crFijo(t,bid):crActual(S.data.bienes[bid]||{}),
+  texto,estado:'abierta',u:S.me||null,t:nowIso(),respuesta:'',uResp:null,tResp:null
+ });
+ return id;
+}
+function crearDudaModal(bid,desdeFicha=false){
+ exigirEscritura();
+ const T=tomasDuda(bid).filter(t=>desdeFicha||t.id===S.tomaSel);
+ if(!T.length)throw new Error('El bien debe pertenecer a una toma abierta.');
+ const tid=T.find(t=>t.id===S.tomaSel)?.id||T[0].id;
+ openForm({title:'Tengo una duda',note:esc(S.data.bienes[bid]?.nombre||bid),fields:[
+  ...(T.length>1?[{k:'toma',l:'Toma',t:'select',opts:T.map(t=>[t.id,t.nombre]),v:tid,req:true,full:true}]:[]),
+  {k:'texto',l:'Tu duda (máximo 500 caracteres)',t:'textarea',req:true,full:true}
+ ],submit:async v=>{await crearDuda(v.toma||tid,bid,v.texto);toast('Duda registrada.');}});
+ $('#ff-texto').maxLength=500;
+}
+async function responderDuda(id,respuesta){
+ exigirAdmin();respuesta=String(respuesta||'').trim();
+ if(!respuesta)throw new Error('Escribe una respuesta.');
+ const d=await leerCR('dudas/'+id);
+ if(!d||d.estado!=='abierta')throw new Error('Esta duda ya no está abierta.');
+ await patch('dudas',id,{respuesta,estado:'respondida',uResp:S.me||null,tResp:nowIso()});
+}
+Object.assign(ACT,{
+ tDuda:bid=>crearDudaModal(bid),
+ tDudaFicha:bid=>crearDudaModal(bid,true),
+ tDudas(){S.dEstado='abierta';S.dCR='';dudasModal(S.tomaSel);},
+ dResponder(id){
+  exigirAdmin();const d=S.data.dudas?.[id];if(!d)return;
+  openForm({title:'Responder duda',note:dudasHtml([{id,...d}]),
+   fields:[{k:'respuesta',l:'Respuesta',t:'textarea',req:true,full:true}],
+   submit:async v=>{await responderDuda(id,v.respuesta);setTimeout(()=>dudasModal(d.tomaId),0);}
+  });
+ }
+});
+document.addEventListener('change',e=>{
+ if(e.target.id==='d-estado'||e.target.id==='d-cr'){
+  S[e.target.id==='d-cr'?'dCR':'dEstado']=e.target.value;dudasModal();
+ }
+});
+
 // Las invocaciones directas se validan igual que los clics; los formularios revalidan al confirmar.
 for(const [nombre,fn] of Object.entries(ACT)){ACT[nombre]=function(...args){if(ADMIN_ACT.has(nombre)&&(!S.admin||S.readonly)){toast('Solo un administrador puede realizar esta acción.');return;}const anterior=accionActual;accionActual=nombre;try{return fn.apply(this,args);}finally{accionActual=anterior;}};}
 route();
