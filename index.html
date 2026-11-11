@@ -219,6 +219,11 @@ dialog.modal::backdrop{background:rgba(10,16,13,.45)}
 .fld label{font-size:13px;font-weight:600}
 .fld .help{font-size:12px;color:var(--muted)}
 .fld .req{color:var(--bad)}
+.fld .flbl{font-size:13px;font-weight:600}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:2px 14px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.checks label{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:14px;padding:3px 0;cursor:pointer}
+.checks input{margin-top:3px}
+.org-prev{max-height:46vh;overflow:auto;margin-top:8px}
 .m-note{grid-column:1/-1;font-size:14px;color:var(--muted);margin:0;line-height:1.55}
 .err{grid-column:1/-1;color:var(--bad);font-size:13px;margin:0}
 
@@ -460,6 +465,7 @@ dialog.modal:has(.v3-body){width:min(1040px,calc(100% - 32px))}
       <a href="#bienes" data-g="bienes">Bienes</a>
       <a href="#mantenimientos" data-g="mant">Mantenimiento</a>
       <a href="#espacios" data-g="esp">Espacios</a>
+      <a href="#areas" data-g="org">Áreas y personas</a>
     </nav>
   </div>
 </header>
@@ -496,7 +502,7 @@ const PAGE = 150;
 
 /* ---------- Estado ---------- */
 const S = {
-  data:{bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}},
+  data:{bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}, areas:{}, personas:{}},
   loaded:{bienes:false, mantenimientos:false, tomas:false, sistemas:false, equipos:false, planos:false}, tView:'lista', sisSel:null,
   mode:'loading', me:null, myName:'', names:{}, view:'resumen', sel:null,
   q:'', f:{tipo:'', etapa:'activos', area:'', ubic:'', cond:'', verif:''}, lim:PAGE,
@@ -685,7 +691,7 @@ async function cambiarRegistroDuplicado(id,activo,motivo,esperada){
 }
 
 /* ---------- Etapa 2.5: permisos y conteos compartidos ---------- */
-const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','registroDuplicado','tFormato71','uImportar','uUsuarios','uResponsablesCR','sCategorias']);
+const ADMIN_ACT=new Set(['tCerrar','tEliminar','tRevertir','registroDuplicado','tFormato71','uImportar','uUsuarios','uResponsablesCR','sCategorias','orgSembrar','arNueva','arEditar','peNueva','peEditar','peUnir','peDesdeTexto','peVincularTexto']);
 let accionActual=null, actividadT=null;
 function errorPermiso(msg){ return Object.assign(new Error(msg),{code:'app-permission'}); }
 function exigirEscritura(){ if(S.readonly) throw errorPermiso('Tienes acceso de solo lectura.'); }
@@ -694,6 +700,7 @@ function exigirLote(n){ exigirEscritura(); if(n>=100) exigirAdmin(); }
 function permisoDocumento(path,id,d){
   if(path==='bienes'){const b=S.data.bienes[id];if(d){if(b?.codigo&&d.codigo!==undefined&&d.codigo!==b.codigo)throw new Error('El código ADM es inmutable.');if(b?.idEtq!=null&&d.idEtq!==undefined&&d.idEtq!==b.idEtq)throw new Error('El ID de etiqueta es inmutable.');if((b&&d.codCont!==undefined&&d.codCont!==(b.codCont||''))||d.registroDuplicado!==undefined||d.regularizacionCodigo!==undefined)exigirAdmin();}const inv=S.data.bienes[id]?.inv,t=S.data.tomas[inv?.tomaId];if(inv?.cierreCR&&t?.crEstados?.[inv.cr]?.op===inv.cierreCR&&['cerrando','revirtiendo'].includes(estadoCR(t,inv.cr)))throw new Error('Esta ficha está en un cierre por CR. Espera a que termine para editarla.');}
   if(path==='tomas'&&(!d||'cierre' in d||'uCierre' in d||d.estado==='cerrada')) exigirAdmin();
+  if(path==='espacios'||path==='areas'||path==='personas') exigirAdmin();
   if(path==='config'&&/^(activoAlias$|crPrioridad$|sistemasCategorias$|activo-alias-prev-|toma-r1-|toma-r3-|toma-eliminada-)/.test(id)) exigirAdmin();
 }
 function aplicarPermisos(){
@@ -826,7 +833,7 @@ function doRender(){
   m.classList.toggle('toma-modulo',S.view==='inventario');
   let html = subNav() + banners();
   if(S.mode==='loading' || (DB && !(S.loaded.bienes && S.loaded.mantenimientos && S.loaded.tomas && S.loaded.sistemas && S.loaded.equipos && S.loaded.planos))) html += `<div class="card empty">Cargando registros…</div>`;
-  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv, espacios:vEspacios}[S.view]||vResumen)();
+  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv, espacios:vEspacios, areas:vAreas, personas:vPersonas}[S.view]||vResumen)();
   let kept=false;
   if(fid && fid!=='gr-q' && isTyping(ae) && m.children.length){ const tpl=document.createElement('div'); tpl.innerHTML=html; const oc=[...m.children], nc=[...tpl.children];
     if(oc.length===nc.length && oc.some(o=>o.contains(ae))){ oc.forEach((o,i)=>{ if(!o.contains(ae)) o.replaceWith(nc[i]); }); kept=true; } }
@@ -837,7 +844,7 @@ function doRender(){
   aplicarPermisos(); programarActividad();
 }
 /* Etapa 2.4: navegación en 4 secciones con subpestañas */
-const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}, esp:{l:'Espacios',v:[['espacios','Espacios']]}};
+const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}, esp:{l:'Espacios',v:[['espacios','Espacios']]}, org:{l:'Áreas y personas',v:[['areas','Áreas'],['personas','Personas']]}};
 function grupoDe(v){ return Object.keys(NAVG).find(k=>NAVG[k].v.some(x=>x[0]===v)) || 'resumen'; }
 function subNav(){ const G=NAVG[grupoDe(S.view)]; if(G.v.length<2) return ''; const B=S._badges||{};
   return `<nav class="subtabs" aria-label="${esc(G.l)}">${G.v.map(([k,l])=>`<a href="#${k}" ${k===S.view?'aria-current="page"':''}>${esc(l)}${B[k]?` <span class="badge">${B[k]}</span>`:''}</a>`).join('')}</nav>`; }
@@ -1234,6 +1241,7 @@ function openForm({title, fields, submit, note, ok='Guardar', danger=false, wide
     if(x.t==='select') inp=`<select class="inp" id="${id}" name="${x.k}">${x.opts.map(o=>{ const [val,lab]=Array.isArray(o)?o:[o,o]; return `<option value="${esc(val)}" ${String(val)===String(v)?'selected':''}>${esc(lab)}</option>`; }).join('')}</select>`;
     else if(x.t==='textarea') inp=`<textarea class="inp" id="${id}" name="${x.k}" rows="3" placeholder="${esc(x.ph||'')}">${esc(v)}</textarea>`;
     else if(x.t==='file') inp=`<input class="inp" id="${id}" name="${x.k}" type="file" accept="${esc(x.accept||'')}">`;
+    else if(x.t==='checks'){ const sel=new Set((Array.isArray(v)?v:[]).map(String)); return `<div class="fld ${x.full?'full':''}" role="group" aria-labelledby="${id}-l"><span class="flbl" id="${id}-l">${esc(x.l)}${x.req?' <span class="req" aria-hidden="true">*</span>':''}</span><div class="checks" id="${id}">${x.opts.map(o=>{ const [val,lab,det]=Array.isArray(o)?o:[o,o]; return `<label><input type="checkbox" name="${x.k}" value="${esc(val)}" ${sel.has(String(val))?'checked':''}><span>${esc(lab)}${det?`<span class="small muted"> · ${esc(det)}</span>`:''}</span></label>`; }).join('')||'<span class="small muted">No hay opciones.</span>'}</div>${x.help?`<span class="help">${esc(x.help)}</span>`:''}</div>`; }
     else inp=`<input class="inp" id="${id}" name="${x.k}" type="${x.t||'text'}" value="${esc(v)}" placeholder="${esc(x.ph||'')}" ${x.list?`data-sug="${x.list}" autocomplete="off"`:''} ${x.t==='number'?'step="any" min="0" inputmode="decimal"':''}>${x.list?'<div class="sug" hidden></div>':''}`;
     return `<div class="fld ${x.full?'full':''}"><label for="${id}">${esc(x.l)}${x.req?' <span class="req" aria-hidden="true">*</span>':''}</label>${inp}${x.help?`<span class="help">${esc(x.help)}</span>`:''}</div>`; }).join('');
   const m=$('#modal'); m.classList.toggle('wide',wide);
@@ -1246,7 +1254,7 @@ async function submitModal(form){
   if(S.busy) return;
   if((formCtx.admin&&!S.admin)||(S.readonly&&!formCtx.lectura)){toast('Tu cuenta ya no tiene permiso para guardar esta acción.');return;}
   const vals={}; const miss=[];
-  formCtx.fields.forEach(x=>{ const el=form.querySelector(`[name="${x.k}"]`); let v; if(x.t==='file'){ v=el&&el.files[0]||null; } else { v=el? el.value.trim() : ''; if(x.t==='number') v = v===''? null : Number(v); } vals[x.k]=v; if(x.req && (v===''||v==null)) miss.push(x.l); });
+  formCtx.fields.forEach(x=>{ if(x.t==='checks'){ const v=[...form.querySelectorAll(`[name="${x.k}"]:checked`)].map(e=>e.value); vals[x.k]=v; if(x.req&&!v.length) miss.push(x.l); return; } const el=form.querySelector(`[name="${x.k}"]`); let v; if(x.t==='file'){ v=el&&el.files[0]||null; } else { v=el? el.value.trim() : ''; if(x.t==='number') v = v===''? null : Number(v); } vals[x.k]=v; if(x.req && (v===''||v==null)) miss.push(x.l); });
   const err=$('#ferr');
   if(miss.length){ err.textContent='Completa: '+miss.join(', ')+'.'; err.hidden=false; return; }
   const ok=$('#mok'); S.busy=true; ok.disabled=true;
@@ -1884,7 +1892,7 @@ async function respaldarTomaEliminada(t,C){
   if(new Blob([datos]).size>900000){await guardarArchivo(nombre,new Blob([datos],{type:'application/json'}));return {archivo:nombre};}
   await put('config',id,{tipo:'Respaldo antes de eliminar toma',formato:'json',fecha:nowIso(),tomaId:t.id,nombre:t.nombre||'',conteos:Object.keys(C).length,datos});return {id};
 }
-Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
+Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
     cols.forEach(c=>{ out.colecciones[c]=structuredClone(S.data[c]||{}); });
     Object.keys(S.data.tomas||{}).forEach(id=>{ out.colecciones[`tomas/${id}/conteos`]=structuredClone(conteos(id)||{}); });
     for(const [tid,t]of Object.entries(S.data.tomas||{})){if(!esAnual(t))continue;const path=`tomas/${tid}/actasCR`;out.colecciones[path]=await coleccionCR(path);for(const op of Object.keys(out.colecciones[path]))out.colecciones[`${path}/${op}/filas`]=await coleccionCR(`${path}/${op}/filas`);}
@@ -2692,7 +2700,7 @@ document.addEventListener('change', e=>{
     guardaHere(); render(); setTimeout(()=>{ const n=t.dataset.hz==='pl'?'#h-am':(S.hAmbOtro?'#h-amb':'#scan'); $(n)?.focus(); },30); }
 });
 document.addEventListener('toggle',e=>{ if(e.target.classList?.contains('cr-progress')) S.anAvanceOpen=e.target.open; if(e.target.classList&&e.target.classList.contains('herebox')) S.hereOpen=e.target.open; },true);
-function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario','espacios'].includes(h)?h:'resumen'; render(); }
+function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario','espacios','areas','personas'].includes(h)?h:'resumen'; render(); }
 window.addEventListener('hashchange', ()=>{ route(); window.scrollTo(0,0); });
 
 /* ---------- Nombres de usuarios ---------- */
@@ -2783,10 +2791,144 @@ Object.assign(ACT,{
 document.addEventListener('input',e=>{if(e.target.id!=='esp-q')return;S.espQ=e.target.value;render();});
 document.addEventListener('toggle',e=>{const d=e.target;if(d?.dataset?.espPiso&&d.open)S.espAbierto=d.dataset.espPiso;},true);
 
+/* ===== Áreas y personas (F1.2, modelo operativo tipo OpenMAINT: unidades organizativas y empleados) =====
+   areas/{id}: nombre, sigla, jefeId, crs (CR contables equivalentes, referencia), activa.
+   personas/{id}: nombre (completo), cargo, areas (varias), correo (opcional), usuarioId (opcional), alias, activa, unidaCon.
+   El área y la persona a cargo de cada bien se CALCULAN hasta la migración F1.5 (no se escribe ninguna ficha durante la toma):
+   1) custodioId de la ficha; 2) custodio escrito (conteo de la toma abierta, si no, la ficha) vinculado por nombre o alias;
+   3) jefe del área del CR del bien (por defecto). */
+const plOrg=(n,a,b)=>`${n} ${n===1?a:b}`;
+const vivos=o=>Object.entries(o||{}).map(([id,x])=>({id,...x})).filter(x=>!x._del);
+const areas=()=>vivos(S.data.areas).sort((a,b)=>(a.activa===false)-(b.activa===false)||String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
+const personas=()=>vivos(S.data.personas).filter(p=>!p.unidaCon).sort((a,b)=>(a.activa===false)-(b.activa===false)||String(a.nombre).localeCompare(String(b.nombre),'es'));
+const PE_BASURA=new Set(['na','n a','n/a','n.a.','ninguno','ninguna','sin custodio','sin responsable','sin asignar','no aplica','no tiene','s/n','sn','por definir','por asignar','pendiente','desconocido','-','--','---','x','xx','?','.']);
+function peLimpiar(t){const s=String(t??'').replace(/\s+/g,' ').trim();return s.length<3||!/[a-zñáéíóú]/i.test(s)||PE_BASURA.has(nrm(s))?'':s;}
+function peFinal(id){const P=S.data.personas||{};let x=id,n=0;while(x&&P[x]?.unidaCon&&n++<20)x=P[x].unidaCon;return x&&P[x]&&!P[x]._del?x:null;}
+function peIndice(){const M=new Map();for(const [id,p] of Object.entries(S.data.personas||{})){if(p._del)continue;const f=peFinal(id);if(!f)continue;for(const n of [p.nombre,...(p.alias||[])]){const k=nrm(n);if(k&&(!M.has(k)||!p.unidaCon))M.set(k,f);}}return M;}
+const peNombre=id=>{const f=peFinal(id);return f?S.data.personas[f].nombre:'';};
+const arNombre=id=>S.data.areas?.[id]?.nombre||'';
+function peSiguiente(){let n=0;for(const id of Object.keys(S.data.personas||{})){const m=/^PER-(\d+)$/.exec(id);if(m)n=Math.max(n,+m[1]);}return n+1;}
+function crsOrg(){const M=new Map(),cfg=S.data.config.crPrioridad?.crs||{},add=(cr,n)=>{cr=String(cr??'').trim();if(!/^\d+$/.test(cr))return;if(!M.get(cr))M.set(cr,String(n||'').trim());};
+ for(const [cr,v] of Object.entries(cfg))add(cr,v?.nombre);
+ for(const b of bienes())add(crActual(b),b.crTomaNombre);
+ for(const t of Object.values(S.data.tomas||{}))if(esAnual(t)&&!t._del)for(const cr of Object.keys(t.crEstados||{}))add(cr,'');
+ return [...M].map(([cr,nombre])=>({cr,nombre})).sort((a,b)=>crOrden(a.cr)-crOrden(b.cr)||a.cr.localeCompare(b.cr,'es',{numeric:true}));}
+const crEtiqueta=c=>`${c.cr}${c.nombre?' — '+c.nombre:''}`;
+function arPorCR(soloActivas=true){const M=new Map();for(const a of areas())if(!soloActivas||a.activa!==false)for(const cr of a.crs||[])if(!M.has(String(cr)))M.set(String(cr),a.id);return M;}
+function tomaVigenteOrg(){return Object.entries(S.data.tomas||{}).map(([id,t])=>({id,...t})).filter(t=>!t._del&&t.estado==='abierta').sort((a,b)=>esAnual(b)-esAnual(a))[0]||null;}
+function orgCtx(){const t=tomaVigenteOrg();return {I:peIndice(),A:arPorCR(),C:t?conteos(t.id):{},AR:S.data.areas||{}};}
+function custodioTexto(b,X){const c=X.C[b.id];return peLimpiar(c&&!c._del&&c.r!=='No localizado'?c.cu:'')||peLimpiar(b.responsable);}
+function areaDeBien(b,X){const a=b.areaId&&X.AR[b.areaId];if(a&&!a._del)return b.areaId;return X.A.get(crActual(b))||null;}
+function personaDeBien(b,X){
+ if(b.custodioId){const f=peFinal(b.custodioId);if(f)return {id:f,fuente:'ficha'};}
+ const tx=custodioTexto(b,X);if(tx){const id=X.I.get(nrm(tx));return id?{id,fuente:'texto',tx}:{id:null,fuente:'sinVincular',tx};}
+ const a=areaDeBien(b,X),f=a&&X.AR[a]?.jefeId?peFinal(X.AR[a].jefeId):null;return f?{id:f,fuente:'jefe'}:{id:null,fuente:'ninguna'};}
+const PE_FUENTE={ficha:'Asignada en la ficha',texto:'Custodio escrito en la toma o la ficha',jefe:'Jefe del área (por defecto)',sinVincular:'Custodio escrito sin vincular',ninguna:'Sin persona a cargo'};
+function orgResumen(){const X=orgCtx(),B=bienes().filter(b=>b.etapa!=='baja'),porP=new Map(),porA=new Map(),sinV=new Map(),cuenta={ficha:0,texto:0,jefe:0,sinVincular:0,ninguna:0};
+ for(const b of B){const r=personaDeBien(b,X);cuenta[r.fuente]++;if(r.id){if(!porP.has(r.id))porP.set(r.id,[]);porP.get(r.id).push([b,r.fuente]);}
+  if(r.fuente==='sinVincular'){const k=nrm(r.tx);if(!sinV.has(k))sinV.set(k,{tx:r.tx,n:0,crs:new Set()});const x=sinV.get(k);x.n++;x.crs.add(crActual(b));}
+  const a=areaDeBien(b,X)||'';porA.set(a,(porA.get(a)||0)+1);}
+ return {X,B,porP,porA,sinV,cuenta};}
+// Carga inicial: un área por CR (sin repetir CR ya asignados) y personas desde los responsables de CR y los custodios escritos.
+function orgPropuesta(){
+ const X=orgCtx(),AR=S.data.areas||{},crA=arPorCR(false),crs=crsOrg(),now=nowIso(),base={creado:now,u:S.me||null,origen:'catálogo inicial'};
+ const nuevasA=[];for(const {cr,nombre} of crs){if(crA.has(cr)||AR['AR-'+cr])continue;nuevasA.push({id:'AR-'+cr,nombre:nombre||'CR '+cr,sigla:'',jefeId:'',crs:[cr],activa:true,...base});crA.set(cr,'AR-'+cr);}
+ const cand=new Map(),add=(txt,cr,jefe)=>{const n=peLimpiar(txt);if(!n)return;const k=nrm(n);if(X.I.has(k))return;if(!cand.has(k))cand.set(k,{var:new Map(),crs:new Set(),n:0});const x=cand.get(k);x.var.set(n,(x.var.get(n)||0)+1);if(cr&&cr!==SIN_CR)x.crs.add(cr);if(!jefe)x.n++;};
+ for(const {cr} of crs)add(responsableCR(cr),cr,true);
+ for(const b of bienes())if(b.etapa!=='baja')add(custodioTexto(b,X),crActual(b),false);
+ let seq=peSiguiente();
+ const nuevasP=[...cand.values()].map(x=>({nombre:[...x.var].sort((a,b)=>b[1]-a[1]||b[0].length-a[0].length)[0][0],crs:[...x.crs],usos:x.n})).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'))
+  .map(p=>({id:'PER-'+String(seq++).padStart(4,'0'),nombre:p.nombre,cargo:'',correo:'',areas:[...new Set(p.crs.map(cr=>crA.get(cr)).filter(Boolean))],usuarioId:'',alias:[],activa:true,usos:p.usos,...base}));
+ const porNombre=new Map(nuevasP.map(p=>[nrm(p.nombre),p.id]));
+ for(const a of nuevasA){const r=nrm(peLimpiar(responsableCR(a.crs[0])));a.jefeId=r?(X.I.get(r)||porNombre.get(r)||''):'';}
+ return {areas:nuevasA,personas:nuevasP};}
+function vOrgCab(titulo,txt,botones){const L=areas(),P=vivos(S.data.personas),prop=S.admin&&!S.readonly?orgPropuesta():null,falt=prop?prop.areas.length+prop.personas.length:0;
+ return `<div class="row between"><h2>${titulo}</h2><div class="row ro-hide">${falt?`<button class="btn ${L.length||P.length?'':'primary'}" data-act="orgSembrar">${L.length||P.length?`Completar desde los CR y custodios (${falt})`:'Crear catálogo inicial'}</button>`:''}${S.admin&&(L.length||P.length)?botones:''}</div></div><p class="muted" style="margin:0;max-width:85ch">${txt}</p>`;}
+function vAreas(){
+ const L=areas(),cab=vOrgCab('Áreas','Áreas usuarias de la institución. Al inicio hay una por CR; puedes cambiarles el nombre, juntar varios CR en una sola área y elegir a su jefe. Cada bien pertenece a un área: mientras no se asigne en su ficha, se usa la del CR del bien.','<button class="btn primary" data-act="arNueva">Nueva área</button>');
+ if(!L.length)return cab+`<div class="card empty">Aún no hay áreas.${S.admin?' Usa «Crear catálogo inicial»: crea un área por cada CR y las personas que ya figuran como responsables de CR o custodios. Revisarás una vista previa antes de guardar.':' Un administrador debe crearlas.'}</div>`;
+ const R=orgResumen(),CR=crsOrg(),cn=new Map(CR.map(c=>[c.cr,c])),sinArea=CR.filter(c=>!R.X.A.has(c.cr)),P=personas(),sinA=R.porA.get('')||0;
+ const aviso=sinArea.length?`<div class="banner warn" style="margin-top:10px"><span class="grow"><b>${sinArea.length} CR sin área:</b> ${esc(sinArea.map(crEtiqueta).join(' · '))}${sinA?` (${sinA} bienes)`:''}. Agrégalos a un área con «Editar».</span></div>`:'';
+ const filas=L.map(a=>{const np=P.filter(p=>(p.areas||[]).includes(a.id)).length;return `<tr><td><button type="button" class="btn link" data-act="arVer" data-id="${esc(a.id)}">${esc(a.nombre)}</button>${a.sigla?` <span class="small muted">(${esc(a.sigla)})</span>`:''}${a.activa===false?' '+chip('Inactiva',''):''}</td><td>${a.jefeId&&peNombre(a.jefeId)?esc(peNombre(a.jefeId)):chip('Sin jefe','c-warn')}</td><td class="small">${(a.crs||[]).map(cr=>esc(crEtiqueta(cn.get(String(cr))||{cr,nombre:''}))).join('<br>')||'—'}</td><td class="num">${np}</td><td class="num">${a.activa===false?'—':R.porA.get(a.id)||0}</td><td class="ro-hide">${S.admin?`<button type="button" class="btn ghost" data-act="arEditar" data-id="${esc(a.id)}">Editar</button>`:''}</td></tr>`;}).join('');
+ return cab+aviso+`<div class="card" style="margin-top:10px"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Área</th><th>Jefe</th><th>CR equivalentes</th><th>Personas</th><th>Bienes</th><th></th></tr></thead><tbody>${filas}</tbody></table></div><p class="small muted" style="margin:8px 0 0">${L.filter(a=>a.activa!==false).length} áreas activas · ${R.B.length-sinA} de ${R.B.length} bienes con área (por su CR).</p></div>`;}
+function vPersonas(){
+ const T=vivos(S.data.personas),cab=vOrgCab('Personas','Personas que tienen bienes a su cargo (custodios), con su nombre completo y cargo. Una persona puede estar en varias áreas. Cada bien tendrá una persona a cargo: mientras no se asigne en su ficha, se usa el custodio escrito en la toma y, si no hay, el jefe del área.','<button class="btn primary" data-act="peNueva">Nueva persona</button>');
+ if(!T.length)return cab+`<div class="card empty">Aún no hay personas.${S.admin?' Usa «Crear catálogo inicial» para traer a los responsables de CR y a los custodios escritos en la toma, sin repetidos.':' Un administrador debe registrarlas.'}</div>`;
+ const R=orgResumen(),q=nrm(S.peQ||''),fa=S.peArea||'',L=personas(),AR=areas();
+ const act=L.filter(p=>p.activa!==false),sinCargo=act.filter(p=>!String(p.cargo||'').trim()).length,c=R.cuenta,con=c.ficha+c.texto+c.jefe;
+ const V=L.filter(p=>(!q||[p.nombre,p.cargo,p.correo,...(p.alias||[])].some(x=>nrm(x).includes(q)))&&(!fa||(fa==='__sin'?!(p.areas||[]).length:(p.areas||[]).includes(fa))));
+ const res=`<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px">${chip(plOrg(act.length,'persona activa','personas activas'),'nodot')}${sinCargo?chip(`${sinCargo} sin cargo`,'c-warn'):''}${chip(`${con} de ${R.B.length} bienes con persona a cargo`,con===R.B.length?'c-ok':'')}</div><p class="small muted" style="margin:6px 0 0">Persona a cargo: ${c.texto} por custodio escrito · ${c.jefe} por jefe del área (por defecto) · ${c.ficha} asignados en la ficha${c.sinVincular?` · <b>${c.sinVincular} con custodio escrito sin vincular</b>`:''}${c.ninguna?` · <b>${c.ninguna} sin persona</b> (su área no tiene jefe)`:''}.</p>`;
+ const fil=`<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:8px"><label class="small" style="flex:1;min-width:240px;max-width:420px">Buscar<input class="inp" style="width:100%" id="pe-q" value="${esc(S.peQ||'')}" placeholder="Nombre, cargo, correo…"></label><label class="small" style="display:grid;min-width:220px">Área<select class="inp" id="pe-area"><option value="">Todas</option>${AR.map(a=>`<option value="${esc(a.id)}" ${fa===a.id?'selected':''}>${esc(a.nombre)}</option>`).join('')}<option value="__sin" ${fa==='__sin'?'selected':''}>Sin área</option></select></label></div>`;
+ const filas=V.slice(0,400).map(p=>`<tr><td><button type="button" class="btn link" data-act="peVer" data-id="${esc(p.id)}">${esc(p.nombre)}</button>${p.activa===false?' '+chip('Inactiva',''):''}${(p.alias||[]).length?`<div class="small muted">También: ${esc(p.alias.join(', '))}</div>`:''}</td><td>${p.cargo?esc(p.cargo):chip('Falta cargo','c-warn')}</td><td class="small">${(p.areas||[]).map(arNombre).filter(Boolean).map(esc).join('<br>')||'—'}</td><td class="small">${esc(p.correo||'')}</td><td class="num">${(R.porP.get(p.id)||[]).length}</td><td class="ro-hide" style="white-space:nowrap">${S.admin?`<button type="button" class="btn ghost" data-act="peEditar" data-id="${esc(p.id)}">Editar</button><button type="button" class="btn ghost" data-act="peUnir" data-id="${esc(p.id)}" title="Es la misma persona que otra registrada">Unir…</button>`:''}</td></tr>`).join('');
+ const SV=[...R.sinV.values()].sort((a,b)=>b.n-a.n);
+ const sinV=SV.length?`<details class="card" style="margin-top:10px" data-pe-sinv ${S.peSinV===false?'':'open'}><summary><b>Custodios escritos sin vincular (${SV.length})</b> <span class="small muted">· nombres que aparecen en la toma o en las fichas y no coinciden con ninguna persona</span></summary><div class="tbl-wrap"><table class="stk"><thead><tr><th>Escrito como</th><th>Bienes</th><th>CR</th><th></th></tr></thead><tbody>${SV.map(x=>`<tr><td>${esc(x.tx)}</td><td class="num">${x.n}</td><td class="small">${esc([...x.crs].filter(cr=>cr!==SIN_CR).join(', '))}</td><td class="ro-hide" style="white-space:nowrap">${S.admin?`<button type="button" class="btn ghost" data-act="peDesdeTexto" data-id="${esc(x.tx)}">Agregar como persona</button><button type="button" class="btn ghost" data-act="peVincularTexto" data-id="${esc(x.tx)}">Es una persona registrada…</button>`:''}</td></tr>`).join('')}</tbody></table></div></details>`:'';
+ return cab+res+fil+`<div class="card" style="margin-top:10px">${V.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>Nombre</th><th>Cargo</th><th>Áreas</th><th>Correo</th><th>Bienes a cargo</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>${V.length>400?'<p class="small muted">Se muestran las primeras 400; usa la búsqueda.</p>':''}`:'<p class="empty">Ninguna persona coincide con el filtro.</p>'}</div>`+sinV;}
+const peOpcionesAreas=()=>areas().filter(a=>a.activa!==false).map(a=>[a.id,a.nombre,(a.crs||[]).join(', ')]);
+function peCampos(p={}){const U=Object.entries(S.usuarios||{}).filter(([,u])=>u&&u.nombre).sort((a,b)=>String(a[1].nombre).localeCompare(String(b[1].nombre),'es'));
+ return [{k:'nombre',l:'Nombres y apellidos completos',v:p.nombre||'',req:true,full:true,ph:'Ej.: Eduardo Barba Quispe'},{k:'cargo',l:'Cargo',v:p.cargo||'',req:true,ph:'Ej.: Jefe de Operaciones'},{k:'correo',l:'Correo (opcional)',t:'email',v:p.correo||''},
+  {k:'areas',l:'Áreas',t:'checks',opts:peOpcionesAreas(),v:p.areas||[],req:true,full:true,help:'Puede estar en varias. El área de cada bien se define en el bien, no por la persona.'},
+  ...(U.length?[{k:'usuarioId',l:'Usuario de la app (opcional)',t:'select',opts:[['','Ninguno'],...U.map(([id,u])=>[id,u.nombre+(u.email?' · '+u.email:'')])],v:p.usuarioId||''}]:[]),
+  {k:'alias',l:'También se le dice (uno por línea)',t:'textarea',v:(p.alias||[]).join('\n'),full:true,help:'Cómo aparece escrito en la toma o en las fichas (iniciales, sin segundo apellido…). Sirve para vincular sus bienes.'},
+  ...(p.id?[{k:'activa',l:'Estado',t:'select',opts:[['si','Activa'],['no','Inactiva (ya no trabaja aquí)']],v:p.activa===false?'no':'si'}]:[])];}
+function peValidar(v,id){const n=String(v.nombre).replace(/\s+/g,' ').trim(),k=nrm(n),I=peIndice();if(n.split(' ').length<2)return 'Escribe nombres y apellidos completos.';
+ if(I.has(k)&&I.get(k)!==id)return `Ya existe «${peNombre(I.get(k))}» con ese nombre. Si es la misma persona, usa «Unir».`;
+ if(v.correo&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.correo))return 'El correo no es válido.';
+ const al=[...new Set(String(v.alias||'').split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(x=>x&&nrm(x)!==k))];for(const a of al){const o=I.get(nrm(a));if(o&&o!==id)return `«${a}» ya es un nombre de ${peNombre(o)}.`;}
+ return {nombre:n,alias:al};}
+Object.assign(ACT,{
+ orgSembrar(){exigirAdmin();const P=orgPropuesta(),ap=new Map([...P.areas.map(a=>[a.id,a.nombre]),...areas().map(a=>[a.id,a.nombre])]),pn=new Map([...P.personas.map(p=>[p.id,p.nombre])]);
+  if(!P.areas.length&&!P.personas.length){toast('No hay nada nuevo que agregar.');return;}
+  const ta=P.areas.length?`<details open><summary><b>Áreas nuevas (${P.areas.length})</b></summary><div class="tbl-wrap"><table><thead><tr><th>CR</th><th>Área</th><th>Jefe</th></tr></thead><tbody>${P.areas.map(a=>`<tr><td>${esc(a.crs[0])}</td><td>${esc(a.nombre)}</td><td>${esc(pn.get(a.jefeId)||peNombre(a.jefeId)||'—')}</td></tr>`).join('')}</tbody></table></div></details>`:'';
+  const tp=P.personas.length?`<details ${P.areas.length?'':'open'}><summary><b>Personas nuevas (${P.personas.length})</b></summary><div class="tbl-wrap"><table><thead><tr><th>Nombre (como está escrito)</th><th>Áreas</th><th>Bienes con su nombre</th></tr></thead><tbody>${P.personas.map(p=>`<tr><td>${esc(p.nombre)}</td><td class="small">${esc(p.areas.map(a=>ap.get(a)).join(', ')||'—')}</td><td class="num">${p.usos}</td></tr>`).join('')}</tbody></table></div></details>`:'';
+  openForm({title:'Áreas y personas: vista previa',wide:true,ok:'Crear',fields:[],note:`Se agregarán <b>${plOrg(P.areas.length,'área','áreas')}</b> (una por cada CR que aún no tiene área) y <b>${plOrg(P.personas.length,'persona','personas')}</b> (responsables de CR y custodios escritos en la toma o en las fichas, sin repetir). Después podrás completar nombres y cargos, unir a quien aparezca dos veces y juntar CR en una misma área. No se cambia ningún bien ni la toma; lo que ya existe no se toca.<div class="org-prev">${ta}${tp}</div>`,
+   submit:async()=>{exigirAdmin();const Q=orgPropuesta();let n=0;await runMany([...Q.personas.map(p=>async()=>{const {id,usos,...d}=p;await put('personas',id,d);n++;}),...Q.areas.map(a=>async()=>{const {id,...d}=a;await put('areas',id,d);n++;})],4,(d,t)=>modalProgress(`Guardando: ${d} de ${t}…`));toast(`Creadas: ${plOrg(Q.areas.length,'área','áreas')} y ${plOrg(Q.personas.length,'persona','personas')}.`);render();}});},
+ arVer(id){const a={id,...S.data.areas[id]},R=orgResumen(),cn=new Map(crsOrg().map(c=>[c.cr,c])),P=personas().filter(p=>(p.areas||[]).includes(id)),porCR=new Map();for(const b of R.B)if(areaDeBien(b,R.X)===id){const cr=crActual(b);porCR.set(cr,(porCR.get(cr)||0)+1);}
+  const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(a.nombre)}${a.sigla?' ('+esc(a.sigla)+')':''}</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p><b>Jefe:</b> ${esc(peNombre(a.jefeId)||'sin definir')}${a.activa===false?' · '+chip('Inactiva',''):''}</p><h3 class="sec">CR equivalentes</h3><ul>${(a.crs||[]).map(cr=>`<li>${esc(crEtiqueta(cn.get(String(cr))||{cr,nombre:''}))} — ${porCR.get(String(cr))||0} bienes</li>`).join('')||'<li class="muted">Ninguno</li>'}</ul><h3 class="sec">Personas (${P.length})</h3>${P.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>Nombre</th><th>Cargo</th><th>Bienes a cargo</th></tr></thead><tbody>${P.map(p=>`<tr><td>${esc(p.nombre)}${p.id===peFinal(a.jefeId)?' '+chip('Jefe','c-info'):''}</td><td>${esc(p.cargo||'—')}</td><td class="num">${(R.porP.get(p.id)||[]).length}</td></tr>`).join('')}</tbody></table></div>`:'<p class="small muted">Nadie registrado en esta área.</p>'}</div><div class="m-f"><button type="button" class="btn primary" data-act="closeModal">Cerrar</button></div>`;if(!m.open)m.showModal();},
+ arNueva(){exigirAdmin();ACT.arEditar(null);},
+ arEditar(id){exigirAdmin();const a=id?{id,...S.data.areas[id]}:{crs:[],activa:true},otro=arPorCR(false),P=personas().filter(p=>p.activa!==false);
+  openForm({title:id?'Editar área':'Nueva área',wide:true,note:id?`Código: <b>${esc(id)}</b> (no cambia).`:'',fields:[{k:'nombre',l:'Nombre del área',v:a.nombre||'',req:true,full:true},{k:'sigla',l:'Sigla (opcional)',v:a.sigla||'',ph:'Ej.: OPE'},{k:'jefeId',l:'Jefe del área',t:'select',opts:[['','Sin definir'],...P.sort((x,y)=>((y.areas||[]).includes(id))-((x.areas||[]).includes(id))||x.nombre.localeCompare(y.nombre,'es')).map(p=>[p.id,p.nombre+(p.cargo?' · '+p.cargo:'')])],v:peFinal(a.jefeId)||'',help:'Si el jefe aún no pertenece al área, se le agrega.'},
+   {k:'crs',l:'CR equivalentes (referencia contable)',t:'checks',full:true,opts:crsOrg().map(c=>{const o=otro.get(c.cr);return [c.cr,crEtiqueta(c),o&&o!==id?'ahora en '+arNombre(o):''];}),v:(a.crs||[]).map(String),help:'Marca los CR que corresponden a esta área. Si un CR estaba en otra área, pasa a esta.'},
+   ...(id?[{k:'activa',l:'Estado',t:'select',opts:[['si','Activa'],['no','Inactiva (ya no existe)']],v:a.activa===false?'no':'si'}]:[])],ok:id?'Guardar':'Crear área',
+   submit:async v=>{exigirAdmin();const nombre=v.nombre.replace(/\s+/g,' ').trim(),k=nrm(nombre);if(areas().some(x=>x.id!==id&&nrm(x.nombre)===k))return {error:'Ya existe un área con ese nombre.'};
+    let nid=id;if(!nid){let n=1;while(S.data.areas?.['AR-M'+String(n).padStart(3,'0')])n++;nid='AR-M'+String(n).padStart(3,'0');}
+    const crs=[...new Set(v.crs.map(String))],movidos=[];
+    for(const o of areas())if(o.id!==nid&&(o.crs||[]).some(cr=>crs.includes(String(cr)))){const quedan=(o.crs||[]).filter(cr=>!crs.includes(String(cr)));movidos.push(o.nombre);await patch('areas',o.id,{crs:quedan,act:nowIso(),uAct:S.me||null});}
+    const d={nombre,sigla:String(v.sigla||'').trim().toUpperCase(),jefeId:v.jefeId||'',crs,act:nowIso(),uAct:S.me||null};
+    if(id)await patch('areas',id,{...d,activa:v.activa!=='no'});else await put('areas',nid,{...d,activa:true,creado:nowIso(),u:S.me||null,origen:'manual'});
+    if(v.jefeId){const j=S.data.personas[v.jefeId];if(j&&!(j.areas||[]).includes(nid))await patch('personas',v.jefeId,{areas:[...(j.areas||[]),nid],act:nowIso(),uAct:S.me||null});}
+    toast(movidos.length?`Guardado. CR movidos desde: ${movidos.join(', ')}.`:'Guardado.');}});},
+ peVer(id){const p={id,...S.data.personas[id]},R=orgResumen(),L=(R.porP.get(id)||[]).sort((a,b)=>(a[0].idEtq??1e9)-(b[0].idEtq??1e9)),u=p.usuarioId&&S.usuarios?.[p.usuarioId];
+  const cuenta=f=>L.filter(x=>x[1]===f).length;
+  const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(p.nombre)}</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p>${esc(p.cargo||'Sin cargo registrado')}${p.correo?' · '+esc(p.correo):''}${u?' · usuario de la app: '+esc(u.nombre):''}${p.activa===false?' · '+chip('Inactiva',''):''}</p><p class="small"><b>Áreas:</b> ${esc((p.areas||[]).map(arNombre).filter(Boolean).join(', ')||'ninguna')}${(p.alias||[]).length?` · <b>También se le dice:</b> ${esc(p.alias.join(', '))}`:''}</p><p><b>${L.length} bienes a su cargo</b>${L.length?` <span class="small muted">(${['ficha','texto','jefe'].filter(cuenta).map(f=>cuenta(f)+' '+PE_FUENTE[f].toLowerCase()).join(' · ')})</span>`:''}</p>${L.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>ID</th><th>Código ADM</th><th>Bien</th><th>Área</th><th>Por qué</th></tr></thead><tbody>${L.slice(0,300).map(([b,f])=>`<tr><td class="num">${esc(b.idEtq??'—')}</td><td><button type="button" class="btn link" data-act="espBien" data-id="${esc(b.id)}">${esc(b.codigo||b.id)}</button></td><td>${esc(b.nombre||'')}</td><td class="small">${esc(arNombre(areaDeBien(b,R.X))||'—')}</td><td class="small">${esc(PE_FUENTE[f])}</td></tr>`).join('')}</tbody></table></div>${L.length>300?'<p class="small muted">Se muestran los primeros 300.</p>':''}`:''}<p class="small muted">Hasta que se asigne la persona en cada ficha (al cerrar la toma), se usa el custodio escrito en la toma o en la ficha y, si no hay, el jefe del área.</p></div><div class="m-f"><button type="button" class="btn primary" data-act="closeModal">Cerrar</button></div>`;if(!m.open)m.showModal();},
+ peNueva(nombre){exigirAdmin();const ini=typeof nombre==='string'?{nombre}:{};if(!areas().length){toast('Primero crea las áreas.');return;}
+  openForm({title:'Nueva persona',wide:true,fields:peCampos(ini),ok:'Agregar',submit:async v=>{exigirAdmin();const r=peValidar(v,null);if(typeof r==='string')return {error:r};const id='PER-'+String(peSiguiente()).padStart(4,'0');
+   const al=ini.nombre&&nrm(ini.nombre)!==nrm(r.nombre)&&!r.alias.some(a=>nrm(a)===nrm(ini.nombre))?[...r.alias,ini.nombre]:r.alias;
+   await put('personas',id,{nombre:r.nombre,cargo:v.cargo.trim(),correo:v.correo||'',areas:v.areas,usuarioId:v.usuarioId||'',alias:al,activa:true,creado:nowIso(),u:S.me||null,origen:'manual'});toast('Persona agregada.');}});},
+ peDesdeTexto(tx){ACT.peNueva(tx);},
+ peEditar(id){exigirAdmin();const p={id,...S.data.personas[id]};
+  openForm({title:'Editar persona',wide:true,note:`Código: <b>${esc(id)}</b>`,fields:peCampos(p),ok:'Guardar',submit:async v=>{exigirAdmin();const r=peValidar(v,id);if(typeof r==='string')return {error:r};
+   const al=nrm(p.nombre)!==nrm(r.nombre)&&!r.alias.some(a=>nrm(a)===nrm(p.nombre))?[...r.alias,p.nombre]:r.alias;
+   await patch('personas',id,{nombre:r.nombre,cargo:v.cargo.trim(),correo:v.correo||'',areas:v.areas,usuarioId:v.usuarioId||'',alias:al,activa:v.activa!=='no',act:nowIso(),uAct:S.me||null});toast('Guardado.');}});},
+ peUnir(id){exigirAdmin();const p={id,...S.data.personas[id]},O=personas().filter(x=>x.id!==id);
+  openForm({title:`Unir «${p.nombre}» con otra persona`,note:'Úsalo cuando la misma persona quedó registrada dos veces (por ejemplo, con y sin segundo apellido). La persona elegida se queda; este nombre pasa a «también se le dice», se suman sus áreas y, si era jefe de un área, la elegida toma su lugar.',fields:[{k:'destino',l:'Es la misma persona que',t:'select',req:true,opts:[['','Elige…'],...O.map(x=>[x.id,x.nombre+(x.cargo?' · '+x.cargo:'')])]}],ok:'Unir',
+   submit:async v=>{exigirAdmin();const d=S.data.personas[v.destino];if(!d)return {error:'Elige a la persona.'};const al=[...new Set([...(d.alias||[]),p.nombre,...(p.alias||[])].filter(x=>nrm(x)!==nrm(d.nombre)))];
+    await patch('personas',v.destino,{alias:al,areas:[...new Set([...(d.areas||[]),...(p.areas||[])])],cargo:d.cargo||p.cargo||'',correo:d.correo||p.correo||'',act:nowIso(),uAct:S.me||null});
+    for(const a of areas())if(a.jefeId===id)await patch('areas',a.id,{jefeId:v.destino,act:nowIso(),uAct:S.me||null});
+    for(const b of bienes())if(b.custodioId===id)await patch('bienes',b.id,{custodioId:v.destino});
+    await patch('personas',id,{activa:false,unidaCon:v.destino,act:nowIso(),uAct:S.me||null});toast(`Unida con ${d.nombre}.`);}});},
+ peVincularTexto(tx){exigirAdmin();const O=personas().filter(x=>x.activa!==false);
+  openForm({title:`¿Quién es «${tx}»?`,note:'Elige a la persona registrada. El texto se guarda como «también se le dice» y sus bienes quedan a su cargo.',fields:[{k:'destino',l:'Persona',t:'select',req:true,opts:[['','Elige…'],...O.map(x=>[x.id,x.nombre+(x.cargo?' · '+x.cargo:'')])]}],ok:'Vincular',
+   submit:async v=>{exigirAdmin();const d=S.data.personas[v.destino];if(!d)return {error:'Elige a la persona.'};await patch('personas',v.destino,{alias:[...new Set([...(d.alias||[]),tx])],act:nowIso(),uAct:S.me||null});toast(`«${tx}» vinculado a ${d.nombre}.`);}});},
+});
+RO_OK.push('arVer','peVer','espVer','espSede','espBien');
+document.addEventListener('input',e=>{if(e.target.id!=='pe-q')return;S.peQ=e.target.value;render();});
+document.addEventListener('change',e=>{if(e.target.id!=='pe-area')return;S.peArea=e.target.value;render();});
+document.addEventListener('toggle',e=>{if(e.target?.hasAttribute?.('data-pe-sinv'))S.peSinV=e.target.open;},true);
+
 const ES_MOVIL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini/i.test(navigator.userAgent) || (matchMedia('(pointer:coarse)').matches && !matchMedia('(any-pointer:fine)').matches);
 const LOCAL = /[?&]local\b/.test(location.search);
 let FS=null, AUTH=null; S.admin=false; S.usuarios={};
-const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios'];
+const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas'];
 const PATH_OK = p => COLS.includes(p) || /^tomas\/[^/]+\/conteos$/.test(p);
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 const LOGO='<svg width="40" height="40" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="6" fill="var(--accent)"/><path d="M8 9h12M8 14h12M8 19h7" stroke="var(--accent-ink)" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="19" r="2" fill="var(--accent-ink)"/></svg>';
