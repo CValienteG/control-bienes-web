@@ -459,6 +459,7 @@ dialog.modal:has(.v3-body){width:min(1040px,calc(100% - 32px))}
       <a href="#inventario" data-g="inv">Inventario</a>
       <a href="#bienes" data-g="bienes">Bienes</a>
       <a href="#mantenimientos" data-g="mant">Mantenimiento</a>
+      <a href="#espacios" data-g="esp">Espacios</a>
     </nav>
   </div>
 </header>
@@ -495,7 +496,7 @@ const PAGE = 150;
 
 /* ---------- Estado ---------- */
 const S = {
-  data:{bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}},
+  data:{bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}},
   loaded:{bienes:false, mantenimientos:false, tomas:false, sistemas:false, equipos:false, planos:false}, tView:'lista', sisSel:null,
   mode:'loading', me:null, myName:'', names:{}, view:'resumen', sel:null,
   q:'', f:{tipo:'', etapa:'activos', area:'', ubic:'', cond:'', verif:''}, lim:PAGE,
@@ -825,7 +826,7 @@ function doRender(){
   m.classList.toggle('toma-modulo',S.view==='inventario');
   let html = subNav() + banners();
   if(S.mode==='loading' || (DB && !(S.loaded.bienes && S.loaded.mantenimientos && S.loaded.tomas && S.loaded.sistemas && S.loaded.equipos && S.loaded.planos))) html += `<div class="card empty">Cargando registros…</div>`;
-  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv}[S.view]||vResumen)();
+  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv, espacios:vEspacios}[S.view]||vResumen)();
   let kept=false;
   if(fid && fid!=='gr-q' && isTyping(ae) && m.children.length){ const tpl=document.createElement('div'); tpl.innerHTML=html; const oc=[...m.children], nc=[...tpl.children];
     if(oc.length===nc.length && oc.some(o=>o.contains(ae))){ oc.forEach((o,i)=>{ if(!o.contains(ae)) o.replaceWith(nc[i]); }); kept=true; } }
@@ -836,7 +837,7 @@ function doRender(){
   aplicarPermisos(); programarActividad();
 }
 /* Etapa 2.4: navegación en 4 secciones con subpestañas */
-const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}};
+const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}, esp:{l:'Espacios',v:[['espacios','Espacios']]}};
 function grupoDe(v){ return Object.keys(NAVG).find(k=>NAVG[k].v.some(x=>x[0]===v)) || 'resumen'; }
 function subNav(){ const G=NAVG[grupoDe(S.view)]; if(G.v.length<2) return ''; const B=S._badges||{};
   return `<nav class="subtabs" aria-label="${esc(G.l)}">${G.v.map(([k,l])=>`<a href="#${k}" ${k===S.view?'aria-current="page"':''}>${esc(l)}${B[k]?` <span class="badge">${B[k]}</span>`:''}</a>`).join('')}</nav>`; }
@@ -2691,7 +2692,7 @@ document.addEventListener('change', e=>{
     guardaHere(); render(); setTimeout(()=>{ const n=t.dataset.hz==='pl'?'#h-am':(S.hAmbOtro?'#h-amb':'#scan'); $(n)?.focus(); },30); }
 });
 document.addEventListener('toggle',e=>{ if(e.target.classList?.contains('cr-progress')) S.anAvanceOpen=e.target.open; if(e.target.classList&&e.target.classList.contains('herebox')) S.hereOpen=e.target.open; },true);
-function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario'].includes(h)?h:'resumen'; render(); }
+function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario','espacios'].includes(h)?h:'resumen'; render(); }
 window.addEventListener('hashchange', ()=>{ route(); window.scrollTo(0,0); });
 
 /* ---------- Nombres de usuarios ---------- */
@@ -2727,10 +2728,65 @@ function makeSeed(T){
 
 /* ---------- Arranque (Firebase · web compartida, solo PC) ---------- */
 const FB_CONFIG={apiKey:"AIzaSyDVeiZcYO7_uRmynk6tntYknxWO3DYeLD0",authDomain:"control-bienes-sbp.firebaseapp.com",projectId:"control-bienes-sbp",storageBucket:"control-bienes-sbp.firebasestorage.app",messagingSenderId:"894006027095",appId:"1:894006027095:web:0b58eef6e436b1acd29412"};
+/* ===== Espacios (F1.1, modelo operativo tipo OpenMAINT): Sede → Edificio → Piso → Ambiente ===== */
+const ESP_SEDES=[['LIM','Sede Lima principal'],['PIU','Sucursal Piura'],['TRU','Sucursal Trujillo'],['HYO','Sucursal Huancayo'],['AQP','Sucursal Arequipa'],['JUL','Sucursal Juliaca'],['CUZ','Sucursal Cusco']];
+const ESP_NIVEL={sede:'Sede',edificio:'Edificio',piso:'Piso',ambiente:'Ambiente'};
+const ESP_TIPOS=['Oficina','Aula','Auditorio','Sala','Depósito / almacén','Comedor / cocina','Servicios higiénicos','Hall / pasillo / escalera','Estacionamiento','Exterior / azotea','Técnico (cuarto de máquinas, tableros)','Otro'];
+const espacios=()=>Object.entries(S.data.espacios||{}).map(([id,e])=>({id,...e})).filter(e=>!e._del);
+const espHijos=(pid)=>espacios().filter(e=>(e.padre||null)===(pid||null)).sort((a,b)=>(a.orden??999)-(b.orden??999)||String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
+function espTipoSugerido(n){const x=nrm(n);const R=[[/aula|clase|taller/,'Aula'],[/auditor/,'Auditorio'],[/sala|museo|exhibic|biblioteca|libreria/,'Sala'],[/almac|deposit|archivo|bodega/,'Depósito / almacén'],[/comedor|cocina|cafeter|kitchen/,'Comedor / cocina'],[/\bss\.?\s?hh|bano|banos|servicio higien|vestuario/,'Servicios higiénicos'],[/hall|pasillo|escalera|recepcion|lobby|corredor|ascensor/,'Hall / pasillo / escalera'],[/estacionam|cochera|sotano/,'Estacionamiento'],[/azotea|terraza|patio|jardin|exterior/,'Exterior / azotea'],[/maquina|tablero|cuarto tecnico|bomba|grupo electr|subestacion|data center|rack/,'Técnico (cuarto de máquinas, tableros)'],[/oficina|gerencia|direccion|jefatura|secretar|contabil|tesorer|administr|recursos|logistic|sistemas/,'Oficina']];for(const [re,t] of R)if(re.test(x))return t;return '';}
+function espPisoCodigo(p){return String(p.id).split('-').slice(1).join('-')||String(p.piso);}
+function espBienesDe(e){const B=bienes().filter(b=>b.etapa!=='baja');if(e.nivel==='ambiente')return B.filter(b=>b.espacioId===e.id||(e.plano&&e.ambId&&b.amb===e.plano+'/'+e.ambId));const ids=new Set();const rec=x=>{for(const h of espHijos(x.id)){ids.add(h.id);rec(h);}};rec(e);ids.add(e.id);const amb=new Set(espacios().filter(x=>ids.has(x.id)&&x.plano&&x.ambId).map(x=>x.plano+'/'+x.ambId));return B.filter(b=>ids.has(b.espacioId)||amb.has(b.amb));}
+function espPropuesta(){
+ const out=[],now=nowIso(),cfg=S.data.config.ubicacionesV3?.mapa||{},alias={};
+ for(const [k,v] of Object.entries(cfg)){if(!v||v==='__texto')continue;try{const [, ,u]=JSON.parse(k);if(u)(alias[v]??=new Set()).add(u);}catch(e){}}
+ ESP_SEDES.forEach(([id,n],i)=>out.push({id,nivel:'sede',padre:null,codigo:id,nombre:n,orden:i}));
+ out.push({id:'LIM-ALM',nivel:'edificio',padre:'LIM',codigo:'ALM',nombre:'Almacenes',zona:SEDES.LIM.zonas[0],orden:0},{id:'LIM-CCB',nivel:'edificio',padre:'LIM',codigo:'CCB',nombre:'Centro Cultural de la Biblia (CCB)',zona:SEDES.LIM.zonas[1],orden:1});
+ ESP_SEDES.slice(1).forEach(([id])=>out.push({id:id+'-PRI',nivel:'edificio',padre:id,codigo:'PRI',nombre:'Edificio principal',orden:0}));
+ for(const p of planos().filter(p=>p.marco==='LIM'||/^LIM-/.test(p.id))){
+  for(const ed of ['LIM-ALM','LIM-CCB']){const zona=ed==='LIM-ALM'?SEDES.LIM.zonas[0]:SEDES.LIM.zonas[1];const A=(p.ambientes||[]).filter(a=>edifZona(a.zona||p.zona)===zona);if(!A.length)continue;
+   const pid=ed+'-'+espPisoCodigo(p);out.push({id:pid,nivel:'piso',padre:ed,codigo:espPisoCodigo(p),nombre:planoNombre(p),plano:p.id,orden:p.orden??99});
+   for(const a of A)out.push({id:pid+'-'+safeId(a.id),nivel:'ambiente',padre:pid,codigo:String(a.id),nombre:a.nombre||'Ambiente '+a.id,tipoAmbiente:espTipoSugerido(a.nombre),plano:p.id,ambId:String(a.id),alias:[...(alias[p.id+'/'+a.id]||[])]});}
+ }
+ return out.map(e=>({activo:true,alias:[],tipoAmbiente:'',areaId:'',...e,creado:now,u:S.me||null,origen:'catálogo inicial'}));
+}
+function espFaltantes(){const E=S.data.espacios||{};return espPropuesta().filter(e=>!E[e.id]);}
+function espFila(e,n){return `<tr><td><button type="button" class="btn link" data-act="espVer" data-id="${esc(e.id)}">${esc(e.nombre)}</button>${e.activo===false?' '+chip('Inactivo',''):''}${(e.alias||[]).length?`<div class="small muted">También: ${esc(e.alias.join(', '))}</div>`:''}</td><td>${esc(e.tipoAmbiente||'—')}</td><td class="num">${n}</td><td class="small muted">${esc(e.id)}</td><td class="ro-hide">${S.admin?`<button type="button" class="btn ghost" data-act="espEditar" data-id="${esc(e.id)}">Editar</button>`:''}</td></tr>`;}
+function vEspacios(){
+ const E=espacios(),q=nrm(S.espQ||''),falt=S.admin?espFaltantes():[];
+ const sedes=espHijos(null);if(!S.espSede||!S.data.espacios?.[S.espSede])S.espSede=sedes[0]?.id||null;
+ const cab=`<div class="row between"><h2>Espacios</h2><div class="row ro-hide">${S.admin&&falt.length?`<button class="btn primary" data-act="espSembrar">${E.length?'Completar catálogo desde los planos ('+falt.length+')':'Crear catálogo inicial'}</button>`:''}</div></div><p class="muted" style="margin:0;max-width:80ch">Dónde están los bienes: sede → edificio → piso → ambiente. Cada bien quedará ubicado en un ambiente oficial. Los nombres que se escriben en campo se guardan como «también se le dice». El catálogo de Lima nace de los planos.</p>`;
+ if(!E.length)return cab+`<div class="card empty">Aún no hay catálogo de espacios.${S.admin?` Usa «Crear catálogo inicial»: crea las 7 sedes, los edificios Almacenes y CCB con los pisos y ambientes de los planos de Lima, y un edificio principal en cada sucursal. Revisarás una vista previa antes de guardar.`:' Un administrador debe crearlo.'}</div>`;
+ const sede=S.data.espacios[S.espSede]?{id:S.espSede,...S.data.espacios[S.espSede]}:null;
+ const tabs=`<div class="row" role="tablist" style="flex-wrap:wrap;gap:6px">${sedes.map(s=>`<button type="button" class="btn ${s.id===S.espSede?'primary':''}" data-act="espSede" data-id="${esc(s.id)}">${esc(s.nombre)} <span class="small">(${espBienesDe(s).length})</span></button>`).join('')}</div>`;
+ const buscar=`<label class="small" style="display:block;margin-top:8px;max-width:460px">Buscar ambiente<input class="inp" style="width:100%" id="esp-q" value="${esc(S.espQ||'')}" placeholder="Nombre o nombre usado en campo"></label>`;
+ const edificios=sede?espHijos(sede.id):[];
+ const cuerpo=edificios.map(ed=>{const pisos=espHijos(ed.id);return `<div class="card"><div class="card-h"><h3>${esc(ed.nombre)}</h3><div class="row"><span class="small muted">${espBienesDe(ed).length} bienes · ${pisos.length} pisos</span>${S.admin?`<button type="button" class="btn ghost ro-hide" data-act="espEditar" data-id="${esc(ed.id)}">Editar</button><button type="button" class="btn ro-hide" data-act="espNuevo" data-id="${esc(ed.id)}">Agregar piso</button>`:''}</div></div>${pisos.map(pi=>{const A=espHijos(pi.id).filter(a=>!q||nrm(a.nombre).includes(q)||(a.alias||[]).some(x=>nrm(x).includes(q)));if(q&&!A.length)return '';return `<details ${q||S.espAbierto===pi.id?'open':''} data-esp-piso="${esc(pi.id)}"><summary><b>${esc(pi.nombre)}</b> <span class="small muted">· ${espHijos(pi.id).length} ambientes · ${espBienesDe(pi).length} bienes</span></summary><div class="row" style="justify-content:flex-end;gap:6px">${S.admin?`<button type="button" class="btn ghost ro-hide" data-act="espEditar" data-id="${esc(pi.id)}">Editar piso</button><button type="button" class="btn ro-hide" data-act="espNuevo" data-id="${esc(pi.id)}">Agregar ambiente</button>`:''}</div>${A.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>Ambiente</th><th>Tipo</th><th>Bienes</th><th>Código</th><th></th></tr></thead><tbody>${A.map(a=>espFila(a,espBienesDe(a).length)).join('')}</tbody></table></div>`:'<p class="small muted">Sin ambientes registrados.</p>'}</details>`;}).join('')||'<p class="small muted">Sin pisos registrados.</p>'}</div>`;}).join('');
+ return cab+tabs+buscar+(cuerpo||'<div class="card empty">Esta sede aún no tiene edificios.</div>')+(sede&&S.admin?`<div class="row ro-hide" style="margin-top:8px"><button type="button" class="btn" data-act="espNuevo" data-id="${esc(sede.id)}">Agregar edificio en ${esc(sede.nombre)}</button></div>`:'');
+}
+const ESP_HIJO={sede:'edificio',edificio:'piso',piso:'ambiente'};
+Object.assign(ACT,{
+ espSede(id){S.espSede=id;render();},
+ espSembrar(){exigirAdmin();const F=espFaltantes(),c=k=>F.filter(e=>e.nivel===k).length,al=F.reduce((n,e)=>n+(e.alias||[]).length,0);
+  openForm({title:'Catálogo de espacios: vista previa',note:`Se agregarán <b>${c('sede')} sedes, ${c('edificio')} edificios, ${c('piso')} pisos y ${c('ambiente')} ambientes</b>${al?` (con ${al} nombres usados en campo)`:''}. Los pisos y ambientes de Lima salen de los planos; las sucursales empiezan con un edificio principal. No se cambia ningún bien ni la toma. Lo que ya existe no se toca.`,ok:'Crear catálogo',fields:[],
+   submit:async()=>{exigirAdmin();let n=0;await runMany(espFaltantes().map(e=>async()=>{await put('espacios',e.id,e);n++;}),4,(d,t)=>modalProgress(`Guardando espacios: ${d} de ${t}…`));toast(`${n} espacios creados.`);render();}});},
+ espNuevo(pid){exigirAdmin();const p={id:pid,...S.data.espacios[pid]},nivel=ESP_HIJO[p.nivel];if(!nivel)return;
+  openForm({title:`Agregar ${ESP_NIVEL[nivel].toLowerCase()} en ${p.nombre}`,fields:[{k:'nombre',l:'Nombre oficial',req:true,full:true},{k:'codigo',l:'Código corto',ph:nivel==='piso'?'P1, S1, AZ…':'401, A-02…',help:'Se usa para formar el identificador; no se puede cambiar después.',req:true},...(nivel==='ambiente'?[{k:'tipoAmbiente',l:'Tipo de ambiente',t:'select',opts:[['','Elige…'],...ESP_TIPOS.map(t=>[t,t])]}]:[])],ok:'Agregar',
+   submit:async v=>{exigirAdmin();const id=pid+'-'+safeId(String(v.codigo).trim().toUpperCase());if(S.data.espacios?.[id])return {error:'Ya existe un espacio con ese código aquí.'};await put('espacios',id,{nivel,padre:pid,codigo:String(v.codigo).trim().toUpperCase(),nombre:v.nombre.trim(),tipoAmbiente:v.tipoAmbiente||'',areaId:'',alias:[],activo:true,orden:espHijos(pid).length,creado:nowIso(),u:S.me||null,origen:'manual'});S.espAbierto=nivel==='ambiente'?pid:S.espAbierto;toast(`${ESP_NIVEL[nivel]} agregado.`);}});},
+ espEditar(id){exigirAdmin();const e={id,...S.data.espacios[id]};
+  openForm({title:`Editar ${ESP_NIVEL[e.nivel].toLowerCase()}`,note:`Código: <b>${esc(e.id)}</b> (no cambia).`,fields:[{k:'nombre',l:'Nombre oficial',v:e.nombre,req:true,full:true},...(e.nivel==='ambiente'?[{k:'tipoAmbiente',l:'Tipo de ambiente',t:'select',opts:[['','Sin definir'],...ESP_TIPOS.map(t=>[t,t])],v:e.tipoAmbiente||''},{k:'alias',l:'También se le dice (uno por línea)',t:'textarea',v:(e.alias||[]).join('\n'),full:true,help:'Nombres que se usan en campo o en la V3 para este ambiente.'}]:[]),{k:'activo',l:'Estado',t:'select',opts:[['si','Activo'],['no','Inactivo (ya no se usa)']],v:e.activo===false?'no':'si'}],ok:'Guardar',
+   submit:async v=>{exigirAdmin();const cambio={nombre:v.nombre.trim(),activo:v.activo!=='no',act:nowIso(),uAct:S.me||null};if(e.nivel==='ambiente'){cambio.tipoAmbiente=v.tipoAmbiente||'';cambio.alias=[...new Set(String(v.alias||'').split('\n').map(x=>x.trim()).filter(Boolean))];}await patch('espacios',id,cambio);toast('Guardado.');}});},
+ espVer(id){const e={id,...S.data.espacios[id]},B=espBienesDe(e).sort((a,b)=>(a.idEtq??1e9)-(b.idEtq??1e9));const ruta=[];let x=e;while(x){ruta.unshift(x.nombre);x=x.padre?{...S.data.espacios[x.padre]}:null;}
+  const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(e.nombre)}</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b"><p class="small muted">${esc(ruta.join(' → '))}${e.tipoAmbiente?' · '+esc(e.tipoAmbiente):''}</p><p><b>${B.length} bienes</b> ubicados aquí (según su ficha).</p>${B.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>ID</th><th>Código ADM</th><th>Bien</th><th>Conservación</th><th>Operatividad</th></tr></thead><tbody>${B.slice(0,300).map(b=>`<tr><td class="num">${esc(b.idEtq??'—')}</td><td><button type="button" class="btn link" data-act="espBien" data-id="${esc(b.id)}">${esc(b.codigo||b.id)}</button></td><td>${esc(b.nombre||'')}</td><td>${esc(b.condicion||'')}</td><td>${esc(b.oper||'')}</td></tr>`).join('')}</tbody></table></div>${B.length>300?'<p class="small muted">Se muestran los primeros 300.</p>':''}`:'<p class="small muted">Ningún bien tiene este ambiente en su ficha todavía. Al cerrar la toma, los bienes encontrados aquí quedarán vinculados.</p>'}</div><div class="m-f"><button type="button" class="btn primary" data-act="closeModal">Cerrar</button></div>`;if(!m.open)m.showModal();},
+ espBien(id){$('#modal').close();openBien(id);}
+});
+document.addEventListener('input',e=>{if(e.target.id!=='esp-q')return;S.espQ=e.target.value;render();});
+document.addEventListener('toggle',e=>{const d=e.target;if(d?.dataset?.espPiso&&d.open)S.espAbierto=d.dataset.espPiso;},true);
+
 const ES_MOVIL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini/i.test(navigator.userAgent) || (matchMedia('(pointer:coarse)').matches && !matchMedia('(any-pointer:fine)').matches);
 const LOCAL = /[?&]local\b/.test(location.search);
 let FS=null, AUTH=null; S.admin=false; S.usuarios={};
-const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config'];
+const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios'];
 const PATH_OK = p => COLS.includes(p) || /^tomas\/[^/]+\/conteos$/.test(p);
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 const LOGO='<svg width="40" height="40" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="6" fill="var(--accent)"/><path d="M8 9h12M8 14h12M8 19h7" stroke="var(--accent-ink)" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="19" r="2" fill="var(--accent-ink)"/></svg>';
