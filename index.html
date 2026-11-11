@@ -1204,6 +1204,20 @@ function vToma(id){
 /* ---------- Ficha (panel lateral) ---------- */
 function openBien(id){ S.histAll=false; S.sel=id; renderDrawer(); $('#drawer').classList.add('on'); $('#scrim').classList.add('on'); setTimeout(()=>$('#drawer .dr-close')?.focus(),50); }
 function closeBien(){ S.sel=null; $('#drawer').classList.remove('on'); $('#scrim').classList.remove('on'); }
+const datoOperativoVacio=v=>v==null||String(v).trim()==='';
+function datosOperativosHtml(id,b){
+  b={...b,id};const X=orgCtx(),tid=tipoDeBien(b),tipo=S.data.tiposBien?.[tid],a=areaDeBien(b,X),p=personaDeBien(b,X);
+  const e=b.espacioId?espacios().find(e=>e.id===b.espacioId):espacios().find(e=>e.nivel==='ambiente'&&e.plano&&e.ambId&&e.plano+'/'+e.ambId===b.amb);
+  const fila=(l,v)=>`<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`,attrs=tipo?.atributos||[];
+  return `<section data-datos-operativos><h3 class="sec">Datos operativos</h3><dl class="kv">${fila('Tipo de bien',(tipo?.nombre||'Sin tipo')+(!b.tipoBienId?' (según su agrupador)':''))}${fila('Espacio',(e?espRuta(e).join(' → '):'—')+(!b.espacioId?' (según la ubicación de la toma)':''))}${fila('Área',(arNombre(a)||'—')+(!b.areaId?' (según su CR)':''))}${fila('Persona a cargo',(peNombre(p.id)||p.tx||'—')+' · '+PE_FUENTE[p.fuente])}</dl><h4>Datos técnicos</h4>${attrs.length?`<dl class="kv">${attrs.map(x=>fila(x.l,datoOperativoVacio(b.atributos?.[x.k])?'—':String(b.atributos[x.k])+(x.u?' '+x.u:''))).join('')}</dl>`:`<p class="hint">${tipo?'Este tipo no tiene datos técnicos definidos.':'El bien no tiene tipo.'}</p>`}${attrs.some(x=>x.req&&datoOperativoVacio(b.atributos?.[x.k]))?'<p class="hint">Faltan datos obligatorios</p>':''}${!S.readonly?`<div class="row ro-hide" style="margin-top:12px"><button class="btn sm" data-act="asignarOperativos" data-id="${esc(id)}">Asignar tipo, área y persona</button><button class="btn sm" data-act="datosTecnicos" data-id="${esc(id)}">Datos técnicos</button></div>`:''}</section>`;
+}
+async function guardarDatosOperativos(id,campos,detalle){
+  exigirEscritura();const b=S.data.bienes[id];if(!b||b._del)throw new Error('La ficha ya no existe.');
+  const keys=Object.keys(campos).filter(k=>JSON.stringify(b[k])!==JSON.stringify(campos[k]));if(!keys.length)return;
+  const prev=Object.fromEntries(keys.map(k=>[k,structuredClone(b[k]??null)])),t=nowIso();
+  await patch('bienes',id,{...Object.fromEntries(keys.map(k=>[k,campos[k]])),act:t,hist:[...(b.hist||[]),{t,tipo:'Datos operativos',det:detalle(keys),u:S.me,prev}]});
+  toast('Datos operativos guardados.');
+}
 function renderDrawer(){
   const b=S.data.bienes[S.sel]; const d=$('#drawer');
   if(!b){ d.innerHTML=`<div class="dr-h"><div class="row between"><h2>Bien eliminado</h2><button class="btn ghost dr-close" data-act="closeBien" aria-label="Cerrar">✕</button></div></div>`; return; }
@@ -1226,6 +1240,7 @@ function renderDrawer(){
   d.innerHTML=`<div class="dr-h"><div class="row between" style="align-items:flex-start;flex-wrap:nowrap"><div style="min-width:0">${b.idEtq!=null?`<div class="idbig mono">ID ${esc(b.idEtq)}</div>`:''}<div class="mono small muted">${esc(b.codigo||'Sin código ADM')}${b.codCont?' · '+esc(b.codCont):''}</div><h2>${esc(b.nombre)}</h2></div><button class="btn ghost dr-close" data-act="closeBien" aria-label="Cerrar ficha">✕</button></div><div class="row" style="gap:6px">${etapaChip(e)} ${ACTIVOS.includes(e)?verifChip(b):''}${b.ejemplo?chip('Ejemplo','nodot'):''}</div>${actions}</div>
   <div class="dr-b">
     ${avisoFichaContable(id,b)}
+    ${datosOperativosHtml(id,b)}
     <section><h3 class="sec">Estado</h3>${(()=>{ const v=(x)=>x&&x!=='Por evaluar'?esc(x):'<span class="sinev">Sin evaluar</span>'; return `<dl class="estbox"><div><dt>Conservación</dt><dd>${v(b.condicion)}</dd></div><div><dt>Operatividad</dt><dd>${v(b.oper)}</dd></div><div><dt>Tipo</dt><dd>${b.tipo?`${esc(TIPO[b.tipo]||b.tipo)} (${esc(b.tipo)})`:'<span class="sinev">Sin definir</span>'}</dd></div></dl>`; })()}</section>
     <section><h3 class="sec">Ubicación y custodio</h3>${sinUb?`<p class="hint">Aún no se conoce dónde está ni quién lo usa. Se completa al verificarlo en una toma de inventario.</p>`:''}<dl class="kv">${kv('Sede / edificio',b.sede)}${kv('Piso',b.piso)}${kv('Ambiente',b.ambiente)}${kv('Cuadrante',cuadDe(b))}${kv('Custodio / usuario',b.responsable)}${kv('Área (CR)',b.area)}${kv('Última verificación', b.inv? `${b.inv.r} · ${fmtD(b.inv.f)} · ${b.inv.toma||''}` : 'Sin verificación física')}${b.crs && b.crs.includes(';')?kv('CR asociados',b.crs,false,true):''}</dl>${(()=>{ const r=ambDe(b.amb); return r?`<div class="miniwrap">${planoHtml(r.p,{hl:r.a.id,mini:true})}<div class="small muted">Plano ${esc(planoNombre(r.p))} · ${esc(r.a.nombre)} <button class="btn link small" data-act="plOpen" data-id="${esc(r.p.id)}">Ver plano</button></div></div>`:''; })()}</section>
     ${afSistemasHtml(id)}
@@ -1286,6 +1301,30 @@ async function crearBien(data, evento, id){ id=id||uid(); await put('bienes', id
 function codeTaken(code, exceptId){ const c=String(code).trim().toUpperCase(); return bienes().some(b=>b.id!==exceptId && (b.codigo||'').toUpperCase()===c); }
 
 const ACT = {
+  asignarOperativos(id){
+    exigirEscritura();const b={...S.data.bienes[id],id},X=orgCtx(),tid=tipoDeBien({...b,tipoBienId:null}),aid=areaDeBien({...b,areaId:null},X),p=personaDeBien({...b,custodioId:null},X);
+    const listas=[{k:'tipoBienId',l:'Tipo',base:'Según su agrupador',calculado:S.data.tiposBien?.[tid]?.nombre||'Sin tipo',L:tiposBien().filter(x=>x.activo!==false)},
+      {k:'areaId',l:'Área',base:'Según su CR',calculado:arNombre(aid)||'Sin área',L:areas().filter(x=>x.activa!==false)},
+      {k:'custodioId',l:'Persona a cargo',base:'Según la toma',calculado:peNombre(p.id)||p.tx||'Sin persona a cargo',L:personas().filter(x=>x.activa!==false)}];
+    openForm({title:'Asignar tipo, área y persona',fields:listas.map(x=>({k:x.k,l:x.l,t:'select',full:true,v:b[x.k]||'',opts:[['',`${x.base} (${x.calculado})`],...x.L.map(y=>[y.id,y.nombre])]})),submit:async v=>{
+      exigirEscritura();for(const x of listas){const d=v[x.k]&&S.data[{tipoBienId:'tiposBien',areaId:'areas',custodioId:'personas'}[x.k]]?.[v[x.k]];if(v[x.k]&&(!d||d._del||d.activo===false||d.activa===false||d.unidaCon))return {error:`Elige ${x.l.toLowerCase()} de la lista activa.`};}
+      await guardarDatosOperativos(id,Object.fromEntries(listas.map(x=>[x.k,v[x.k]||null])),keys=>keys.map(k=>{const x=listas.find(x=>x.k===k);return `${x.l}: ${v[k]?x.L.find(y=>y.id===v[k])?.nombre:x.base.toLowerCase()}`;}).join(' · '));
+    }});
+  },
+  datosTecnicos(id){
+    exigirEscritura();const b={...S.data.bienes[id],id},tid=tipoDeBien(b),tipo=S.data.tiposBien?.[tid];
+    if(!tipo){toast('El bien no tiene tipo. Asigna un tipo para completar sus datos técnicos.');return;}
+    const attrs=tipo.atributos||[],fields=attrs.map((a,i)=>({k:'dato'+i,l:a.l+(a.u?' ('+a.u+')':''),t:{texto:'text',numero:'number',lista:'select',fecha:'date'}[a.t],v:b.atributos?.[a.k],req:a.req,opts:a.t==='lista'?[['','Elige una opción'],...(a.opts||[]).map(o=>[o,o])]:undefined}));
+    openForm({title:'Datos técnicos',note:esc(tipo.nombre)+(attrs.length?'':' · Este tipo no tiene datos técnicos definidos.'),fields,submit:async v=>{
+      exigirEscritura();const actual={...S.data.bienes[id],id};if(tipoDeBien(actual)!==tid||JSON.stringify(S.data.tiposBien?.[tid]?.atributos||[])!==JSON.stringify(attrs))return {error:'El tipo o sus datos cambiaron. Abre de nuevo los datos técnicos.'};
+      const atributos={...(actual.atributos||{})},cambios=[];
+      for(let i=0;i<attrs.length;i++){const a=attrs[i],val=v['dato'+i];if(a.req&&datoOperativoVacio(val))return {error:'Completa: '+a.l+'.'};
+        if(!datoOperativoVacio(val)&&((a.t==='numero'&&!Number.isFinite(val))||(a.t==='lista'&&!(a.opts||[]).includes(val))))return {error:'Revisa: '+a.l+'.'};
+        if(JSON.stringify(atributos[a.k]??null)!==JSON.stringify(val)){atributos[a.k]=val;cambios.push(a.l);}}
+      if(cambios.length)await guardarDatosOperativos(id,{atributos},()=> 'Datos técnicos: '+cambios.join(', '));
+    }});
+    fields.forEach(f=>{if(f.t==='number')$('#ff-'+f.k).removeAttribute('min');});
+  },
   nuevoReq(){ openForm({title:'Nuevo requerimiento', note:'Registra la necesidad de un bien. Quedará pendiente de aprobación.', fields:[F.nombre(), F.tipo(), F.categoria(), F.area('',true), {k:'solicitante',l:'Solicitado por',req:true,list:'responsable'}, {k:'fechaReq',l:'Fecha en que se necesita',t:'date'}, {k:'justif',l:'Justificación',t:'textarea',req:true,full:true,ph:'¿Para qué se necesita? ¿Reemplaza a otro bien?'}],
     submit:async v=>{ const id=await crearBien({nombre:v.nombre,tipo:v.tipo,categoria:v.categoria,area:v.area,solicitante:v.solicitante,fechaReq:v.fechaReq,justif:v.justif,etapa:'requerimiento'}, ev('Requerimiento creado', `${v.solicitante} (${v.area}): ${v.justif}`)); toast('Requerimiento registrado.'); openBien(id); } }); },
   nuevoExistente(){ openForm({title:'Registrar bien', note:'Para bienes que ya están en uso y aún no figuran en el registro.', fields:[F.nombre(), F.tipo('AF'), {k:'codigo',l:'Código patrimonial / etiqueta',req:true,v:nextCode('AF'),help:'Sugerido; puedes usar tu propio código.'}, {k:'codCont',l:'Código contable'}, F.categoria(), F.marca(), F.modelo(), F.serie(), F.area('',true), ...ubF({},true), F.responsable('',true), F.condicion(), F.oper(), {k:'fechaAlta',l:'Fecha de alta',t:'date',v:today()}, {k:'obs',l:'Observaciones',t:'textarea',full:true}],
@@ -2744,6 +2783,7 @@ const ESP_NIVEL={sede:'Sede',edificio:'Edificio',piso:'Piso',ambiente:'Ambiente'
 const ESP_TIPOS=['Oficina','Aula','Auditorio','Sala','Depósito / almacén','Comedor / cocina','Servicios higiénicos','Hall / pasillo / escalera','Estacionamiento','Exterior / azotea','Técnico (cuarto de máquinas, tableros)','Otro'];
 const espacios=()=>Object.entries(S.data.espacios||{}).map(([id,e])=>({id,...e})).filter(e=>!e._del);
 const espHijos=(pid)=>espacios().filter(e=>(e.padre||null)===(pid||null)).sort((a,b)=>(a.orden??999)-(b.orden??999)||String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
+function espRuta(e){const ruta=[],vistos=new Set();while(e&&!vistos.has(e.id)){vistos.add(e.id);ruta.unshift(e.nombre);const padre=e.padre;e=padre&&S.data.espacios?.[padre]?{...S.data.espacios[padre],id:padre}:null;}return ruta;}
 function espTipoSugerido(n){const x=nrm(n);const R=[[/aula|clase|taller/,'Aula'],[/auditor/,'Auditorio'],[/sala|museo|exhibic|biblioteca|libreria/,'Sala'],[/almac|deposit|archivo|bodega/,'Depósito / almacén'],[/comedor|cocina|cafeter|kitchen/,'Comedor / cocina'],[/\bss\.?\s?hh|bano|banos|servicio higien|vestuario/,'Servicios higiénicos'],[/hall|pasillo|escalera|recepcion|lobby|corredor|ascensor/,'Hall / pasillo / escalera'],[/estacionam|cochera|sotano/,'Estacionamiento'],[/azotea|terraza|patio|jardin|exterior/,'Exterior / azotea'],[/maquina|tablero|cuarto tecnico|bomba|grupo electr|subestacion|data center|rack/,'Técnico (cuarto de máquinas, tableros)'],[/oficina|gerencia|direccion|jefatura|secretar|contabil|tesorer|administr|recursos|logistic|sistemas/,'Oficina']];for(const [re,t] of R)if(re.test(x))return t;return '';}
 function espPisoCodigo(p){return String(p.id).split('-').slice(1).join('-')||String(p.piso);}
 function espBienesDe(e){const B=bienes().filter(b=>b.etapa!=='baja');if(e.nivel==='ambiente')return B.filter(b=>b.espacioId===e.id||(e.plano&&e.ambId&&b.amb===e.plano+'/'+e.ambId));const ids=new Set();const rec=x=>{for(const h of espHijos(x.id)){ids.add(h.id);rec(h);}};rec(e);ids.add(e.id);const amb=new Set(espacios().filter(x=>ids.has(x.id)&&x.plano&&x.ambId).map(x=>x.plano+'/'+x.ambId));return B.filter(b=>ids.has(b.espacioId)||amb.has(b.amb));}
@@ -2786,7 +2826,7 @@ Object.assign(ACT,{
  espEditar(id){exigirAdmin();const e={id,...S.data.espacios[id]};
   openForm({title:`Editar ${ESP_NIVEL[e.nivel].toLowerCase()}`,note:`Código: <b>${esc(e.id)}</b> (no cambia).`,fields:[{k:'nombre',l:'Nombre oficial',v:e.nombre,req:true,full:true},...(e.nivel==='ambiente'?[{k:'tipoAmbiente',l:'Tipo de ambiente',t:'select',opts:[['','Sin definir'],...ESP_TIPOS.map(t=>[t,t])],v:e.tipoAmbiente||''},{k:'alias',l:'También se le dice (uno por línea)',t:'textarea',v:(e.alias||[]).join('\n'),full:true,help:'Nombres que se usan en campo o en la V3 para este ambiente.'}]:[]),{k:'activo',l:'Estado',t:'select',opts:[['si','Activo'],['no','Inactivo (ya no se usa)']],v:e.activo===false?'no':'si'}],ok:'Guardar',
    submit:async v=>{exigirAdmin();const cambio={nombre:v.nombre.trim(),activo:v.activo!=='no',act:nowIso(),uAct:S.me||null};if(e.nivel==='ambiente'){cambio.tipoAmbiente=v.tipoAmbiente||'';cambio.alias=[...new Set(String(v.alias||'').split('\n').map(x=>x.trim()).filter(Boolean))];}await patch('espacios',id,cambio);toast('Guardado.');}});},
- espVer(id){const e={id,...S.data.espacios[id]},B=espBienesDe(e).sort((a,b)=>(a.idEtq??1e9)-(b.idEtq??1e9));const ruta=[];let x=e;while(x){ruta.unshift(x.nombre);x=x.padre?{...S.data.espacios[x.padre]}:null;}
+ espVer(id){const e={id,...S.data.espacios[id]},B=espBienesDe(e).sort((a,b)=>(a.idEtq??1e9)-(b.idEtq??1e9)),ruta=espRuta(e);
   const m=$('#modal');m.classList.add('wide');m.innerHTML=`<div class="m-h"><h2>${esc(e.nombre)}</h2><button type="button" class="btn ghost" data-act="closeModal" aria-label="Cerrar">✕</button></div><div class="m-b blk"><p class="small muted">${esc(ruta.join(' → '))}${e.tipoAmbiente?' · '+esc(e.tipoAmbiente):''}</p><p><b>${B.length} bienes</b> ubicados aquí (según su ficha).</p>${B.length?`<div class="tbl-wrap"><table class="stk"><thead><tr><th>ID</th><th>Código ADM</th><th>Bien</th><th>Conservación</th><th>Operatividad</th></tr></thead><tbody>${B.slice(0,300).map(b=>`<tr><td class="num">${esc(b.idEtq??'—')}</td><td><button type="button" class="btn link" data-act="espBien" data-id="${esc(b.id)}">${esc(b.codigo||b.id)}</button></td><td>${esc(b.nombre||'')}</td><td>${esc(b.condicion||'')}</td><td>${esc(b.oper||'')}</td></tr>`).join('')}</tbody></table></div>${B.length>300?'<p class="small muted">Se muestran los primeros 300.</p>':''}`:'<p class="small muted">Ningún bien tiene este ambiente en su ficha todavía. Al cerrar la toma, los bienes encontrados aquí quedarán vinculados.</p>'}</div><div class="m-f"><button type="button" class="btn primary" data-act="closeModal">Cerrar</button></div>`;if(!m.open)m.showModal();},
  espBien(id){$('#modal').close();openBien(id);}
 });
