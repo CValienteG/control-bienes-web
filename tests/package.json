@@ -1,6 +1,6 @@
 {
   "name": "control-bienes-v3-tests",
   "private": true,
-  "scripts": {"test": "node v3.cjs && node v3-limites.cjs && node v3-resultado.cjs && node v3-codigos.cjs && node toma-eliminar.cjs && node v3-agrupador.cjs && node v3-contrato.cjs"},
+  "scripts": {"test": "node v3.cjs && node v3-limites.cjs && node v3-resultado.cjs && node v3-codigos.cjs && node toma-eliminar.cjs && node v3-agrupador.cjs && node v3-contrato.cjs && node espacios.cjs"},
   "devDependencies": {"playwright": "1.62.1"}
 }
