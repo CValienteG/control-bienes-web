@@ -43,30 +43,52 @@ print(json.dumps({'hojas':wb.sheetnames,'listas_oculta':wb['Listas'].sheet_state
  // 3. Reglas de interpretación de cada fila
  const H=[...CONSULTA,...CAMPO];
  const fila=(n,v)=>H.map(h=>({'ID':n,'CÓDIGO ADMINISTRACIÓN':'PRUEBA-'+String(n).padStart(4,'0'),'CÓDIGO CONTABLE':'P-'+String(n).padStart(6,'0'),'ACTIVO':'Silla de prueba','CÓDIGO CR':20312,'CR':'Operaciones CCB','Prioridad CR':1,...v})[h]??'');
+ const completo={'CANTIDAD':1,'EDIFICIO':'CCB','PISO':'4','UBICACIÓN':'Aula 401'};
  const casos=[
-  [1,{'UBICACIÓN':'Aula 401'},'Encontrado','solo UBICACIÓN'],
-  [2,{'OPERATIVIDAD':'Operativo'},'Encontrado','solo OPERATIVIDAD'],
-  [3,{'CONSERVACIÓN':'Bueno'},'Encontrado','solo CONSERVACIÓN'],
-  [4,{'CUSTODIO':'Ana Pérez'},'Encontrado','solo CUSTODIO'],
-  [5,{'EDIFICIO':'CCB','PISO':'4'},'Encontrado','EDIFICIO y PISO'],
-  [6,{'CANTIDAD':1},'Encontrado','solo CANTIDAD 1'],
+  [1,{...completo},'Encontrado','CANTIDAD + EDIFICIO + PISO + UBICACIÓN'],
+  [2,{...completo,'OPERATIVIDAD':'Operativo','CONSERVACIÓN':'Bueno','CUSTODIO':'Ana'},'Encontrado','completo con datos opcionales'],
+  [3,{'UBICACIÓN':'Aula 401'},null,'solo UBICACIÓN (incompleta)'],
+  [4,{'OPERATIVIDAD':'Operativo','CONSERVACIÓN':'Bueno','CUSTODIO':'Ana'},null,'sin CANTIDAD ni ubicación (incompleta)'],
+  [5,{'CANTIDAD':1,'EDIFICIO':'CCB','PISO':'4'},null,'sin UBICACIÓN (incompleta)'],
+  [6,{'CANTIDAD':1},null,'solo CANTIDAD 1 (incompleta)'],
   [7,{'CANTIDAD':0},'No localizado','CANTIDAD 0'],
   [8,{'CONSERVACIÓN':'No localizado'},'No localizado','«No localizado» escrito en CONSERVACIÓN'],
-  [9,{'RESULTADO':'Por conciliar','UBICACIÓN':'Aula 402'},'Por conciliar','RESULTADO Por conciliar con ubicación'],
+  [9,{...completo,'RESULTADO':'Por conciliar'},'Por conciliar','RESULTADO Por conciliar con los obligatorios'],
   [10,{'FECHA DE INVENTARIO':'10/11/2026','OBSERVACIONES':'revisar'},null,'solo FECHA y OBSERVACIONES'],
   [11,{},null,'fila sin datos de campo'],
   [12,{'MARCA':'Otra','MODELO':'X','SERIE / PLACA':'123'},null,'solo columnas grises editadas'],
  ];
  const rows=[H,...casos.map(([n,v])=>fila(n,v))];
  const out=await p.evaluate(async rows=>{const blob=await xlsxBlob([{name:'ETIQUETA',rows}]);const f=new File([blob],'contrato.xlsx');const r=await analizarImport(f,{id:'anual',...S.data.tomas.anual});
-  const reg=Object.fromEntries([...r.reg.entries()].map(([id,x])=>[id,x.d?.r||null]));return {reg,errores:r.errores,enc:r.enc,nol:r.nol,conc:r.conc};},rows);
+  const reg=Object.fromEntries([...r.reg.entries()].map(([id,x])=>[id,x.d?.r||null]));return {reg,errores:r.errores,incompletas:r.incompletas.map(x=>[x.ri,x.faltan.join(',')])};},rows);
  assert.deepEqual(out.errores,[]);
+ assert.deepEqual(out.incompletas,[[4,'CANTIDAD,EDIFICIO,PISO'],[5,'CANTIDAD,EDIFICIO,PISO,UBICACIÓN'],[6,'UBICACIÓN'],[7,'EDIFICIO,PISO,UBICACIÓN']],'filas incompletas y lo que les falta');
  for(const [n,,esperado,desc] of casos){const id='PRUEBA-'+String(n).padStart(4,'0');assert.equal(out.reg[id]??null,esperado,`${desc}: se esperaba ${esperado??'pendiente'}`);}
- report('Reglas: cualquier dato de ubicación, operatividad, conservación, custodio o CANTIDAD 1 = Encontrado; CANTIDAD 0 o «No localizado» = No localizado; RESULTADO Por conciliar se respeta; fecha, observaciones o columnas grises solas no cuentan');
+ report('Reglas: Encontrado exige CANTIDAD, EDIFICIO, PISO y UBICACIÓN; si falta alguno la fila es incompleta y no se importa; CANTIDAD 0 o «No localizado» = No localizado sin ubicación; RESULTADO Por conciliar se respeta');
+
+ // 3b. Bienes que no están en la lista (sobrantes)
+ const sob=[H,fila(30,completo),
+  H.map(h=>({'ACTIVO':'Silla giratoria negra','MARCA':'Acme','CANTIDAD':2,'EDIFICIO':'CCB','PISO':'4','UBICACIÓN':'Aula 401','CÓDIGO CR':20312,'OBSERVACIONES':'sin etiqueta'})[h]??''),
+  H.map(h=>({'ACTIVO':'Mesa plegable','CANTIDAD':1,'EDIFICIO':'CCB'})[h]??''),
+  H.map(h=>({'ACTIVO':'Proyector antiguo','CANTIDAD':1,'EDIFICIO':'Almacenes','PISO':'6','UBICACIÓN':'Depósito','CÓDIGO CR':20312})[h]??''),
+  H.map(h=>({'ID':9999,'ACTIVO':'Silla con ID mal escrito','CANTIDAD':1,'EDIFICIO':'CCB','PISO':'4','UBICACIÓN':'Aula 401'})[h]??''),
+  H.map(h=>({'ACTIVO':'Pizarra','CANTIDAD':0})[h]??'')];
+ const rs=await p.evaluate(async rows=>{const blob=await xlsxBlob([{name:'ETIQUETA',rows}]);const r=await analizarImport(new File([blob],'sobrantes.xlsx'),{id:'anual',...S.data.tomas.anual});
+  S._imp={r,file:'sobrantes.xlsx'};S.tomaSel='anual';previewV3();const boton=document.querySelector('#mok').innerText;
+  await ejecutarV3();const t=S.data.tomas.anual;return {errores:r.errores,sob:r.sobrantes.map(x=>[x.ri,x.s.d,x.s.cant,x.s.cr,x.s.ub]),desc:r.desconocidos.map(x=>x.ri),inc:r.incompletas.map(x=>[x.ri,x.d]),boton,guardados:(t.sobrantes||[]).map(s=>[s.d,s.cant,s.cr,s.marca]),modal:document.querySelector('#modal').innerText};},sob);
+ assert.deepEqual(rs.errores,[]);
+ assert.deepEqual(rs.sob,[[3,'Silla giratoria negra',2,'20312','CCB · 4 · Aula 401'],[5,'Proyector antiguo',1,'20312','Almacenes · 6 · Depósito']]);
+ assert.deepEqual(rs.inc,[[4,'Mesa plegable']]);assert.deepEqual(rs.desc,[6,7],'un ID escrito que no existe, o un no registrado con CANTIDAD 0, no se toma como sobrante: queda por revisar');
+ assert.equal(rs.boton,'Importar 1 conteo y 2 no registrados');
+ assert.deepEqual(rs.guardados,[['Silla giratoria negra',2,'20312','Acme'],['Proyector antiguo',1,'20312','']]);
+ assert.match(rs.modal,/2 bienes no registrados agregados como sobrantes/);assert.match(rs.modal,/1 filas incompletas no se importaron/);
+ const re=await p.evaluate(async rows=>{const blob=await xlsxBlob([{name:'ETIQUETA',rows}]);const r=await analizarImport(new File([blob],'sobrantes.xlsx'),{id:'anual',...S.data.tomas.anual});return r.sobrantes.map(x=>x.s.ya);},sob);
+ assert.deepEqual(re,[true,true]);
+ report('Bienes no registrados: filas sin ID ni código ADM, con ACTIVO y los obligatorios se agregan como sobrantes del CR; incompletos se listan; CANTIDAD 0 se ignora; reimportar no los duplica');
 
  // 4. Columnas de más y orden distinto: se lee por título
  const H2=['COLUMNA PROPIA',...[...H].reverse()];
- const f2=fila(20,{'UBICACIÓN':'Aula 403'});const v2=Object.fromEntries(H.map((h,i)=>[h,f2[i]]));
+ const f2=fila(20,{...completo,'UBICACIÓN':'Aula 403'});const v2=Object.fromEntries(H.map((h,i)=>[h,f2[i]]));
  const out2=await p.evaluate(async rows=>{const blob=await xlsxBlob([{name:'ETIQUETA',rows}]);const r=await analizarImport(new File([blob],'orden.xlsx'),{id:'anual',...S.data.tomas.anual});return {reg:r.reg.get('PRUEBA-0020')?.d?.r,errores:r.errores};},[H2,['nota',...[...H].reverse().map(h=>v2[h])]]);
  assert.deepEqual(out2.errores,[]);assert.equal(out2.reg,'Encontrado');
  // Requisito mínimo: los 13 títulos base de la V3 original deben estar presentes (V3_HEADERS o sus equivalentes nuevos).
