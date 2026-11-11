@@ -504,11 +504,11 @@ const PAGE = 150;
 
 /* ---------- Estado ---------- */
 const S = {
-  data:{dudas:{}, bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}, areas:{}, personas:{}, tiposBien:{}},
+  data:{proveedores:{}, planesPreventivos:{}, fallas:{}, dudas:{}, bienes:{}, mantenimientos:{}, tomas:{}, sistemas:{}, equipos:{}, planos:{}, config:{}, espacios:{}, areas:{}, personas:{}, tiposBien:{}},
   loaded:{bienes:false, mantenimientos:false, tomas:false, sistemas:false, equipos:false, planos:false}, tView:'lista', sisSel:null,
   mode:'loading', me:null, myName:'', names:{}, view:'resumen', sel:null,
   q:'', f:{tipo:'', etapa:'activos', area:'', ubic:'', cond:'', verif:''}, lim:PAGE,
-  mf:'pendientes', tomaSel:null, tf:'pendientes', tAgr:'', tq:'', tlim:PAGE, readonly:false,
+  mf:'pendientes', mPlan:'', mTipo:'', mEjecutor:'', prQ:'', tomaSel:null, tf:'pendientes', tAgr:'', tq:'', tlim:PAGE, readonly:false,
   here:{sede:'',piso:'',ambiente:'',cu:'',c:'Bueno',o:'Operativo'}, busy:false,
 };
 try{ const h=JSON.parse(localStorage.getItem('cb-here')||'null'); if(h) Object.assign(S.here,h); }catch(e){}
@@ -702,7 +702,7 @@ function exigirLote(n){ exigirEscritura(); if(n>=100) exigirAdmin(); }
 function permisoDocumento(path,id,d){
   if(path==='bienes'){const b=S.data.bienes[id];if(d){if(b?.codigo&&d.codigo!==undefined&&d.codigo!==b.codigo)throw new Error('El código ADM es inmutable.');if(b?.idEtq!=null&&d.idEtq!==undefined&&d.idEtq!==b.idEtq)throw new Error('El ID de etiqueta es inmutable.');if((b&&d.codCont!==undefined&&d.codCont!==(b.codCont||''))||d.registroDuplicado!==undefined||d.regularizacionCodigo!==undefined)exigirAdmin();}const inv=S.data.bienes[id]?.inv,t=S.data.tomas[inv?.tomaId];if(inv?.cierreCR&&t?.crEstados?.[inv.cr]?.op===inv.cierreCR&&['cerrando','revirtiendo'].includes(estadoCR(t,inv.cr)))throw new Error('Esta ficha está en un cierre por CR. Espera a que termine para editarla.');}
   if(path==='tomas'&&(!d||'cierre' in d||'uCierre' in d||d.estado==='cerrada')) exigirAdmin();
-  if(path==='espacios'||path==='areas'||path==='personas'||path==='tiposBien') exigirAdmin();
+  if(path==='espacios'||path==='areas'||path==='personas'||path==='tiposBien'||path==='proveedores'||path==='planesPreventivos') exigirAdmin();
   if(path==='config'&&/^(activoAlias$|crPrioridad$|sistemasCategorias$|activo-alias-prev-|toma-r1-|toma-r3-|toma-eliminada-)/.test(id)) exigirAdmin();
 }
 function aplicarPermisos(){
@@ -835,7 +835,7 @@ function doRender(){
   m.classList.toggle('toma-modulo',S.view==='inventario');
   let html = subNav() + banners();
   if(S.mode==='loading' || (DB && !(S.loaded.bienes && S.loaded.mantenimientos && S.loaded.tomas && S.loaded.sistemas && S.loaded.equipos && S.loaded.planos))) html += `<div class="card empty">Cargando registros…</div>`;
-  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv, espacios:vEspacios, areas:vAreas, personas:vPersonas, tipos:vTipos}[S.view]||vResumen)();
+  else html += ({resumen:vResumen, bienes:vBienes, ciclo:vCiclo, mantenimientos:vMant, sistemas:vSistemas, planos:vPlanos, inventario:vInv, espacios:vEspacios, areas:vAreas, personas:vPersonas, tipos:vTipos, proveedores:vProveedores, planes:vPlanes, fallas:vFallas}[S.view]||vResumen)();
   let kept=false;
   if(fid && fid!=='gr-q' && isTyping(ae) && m.children.length){ const tpl=document.createElement('div'); tpl.innerHTML=html; const oc=[...m.children], nc=[...tpl.children];
     if(oc.length===nc.length && oc.some(o=>o.contains(ae))){ oc.forEach((o,i)=>{ if(!o.contains(ae)) o.replaceWith(nc[i]); }); kept=true; } }
@@ -846,7 +846,7 @@ function doRender(){
   aplicarPermisos(); programarActividad();
 }
 /* Etapa 2.4: navegación en 4 secciones con subpestañas */
-const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida'],['tipos','Tipos de bien']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Mantenimientos'],['sistemas','Sistemas']]}, esp:{l:'Espacios',v:[['espacios','Espacios']]}, org:{l:'Áreas y personas',v:[['areas','Áreas'],['personas','Personas']]}};
+const NAVG = {resumen:{l:'Resumen',v:[['resumen','Resumen']]}, inv:{l:'Inventario',v:[['inventario','Toma de inventario'],['planos','Planos']]}, bienes:{l:'Bienes',v:[['bienes','Bienes'],['ciclo','Ciclo de vida'],['tipos','Tipos de bien']]}, mant:{l:'Mantenimiento',v:[['mantenimientos','Órdenes de trabajo'],['planes','Planes preventivos'],['proveedores','Proveedores'],['fallas','Fallas'],['sistemas','Sistemas']]}, esp:{l:'Espacios',v:[['espacios','Espacios']]}, org:{l:'Áreas y personas',v:[['areas','Áreas'],['personas','Personas']]}};
 function grupoDe(v){ return Object.keys(NAVG).find(k=>NAVG[k].v.some(x=>x[0]===v)) || 'resumen'; }
 function subNav(){ const G=NAVG[grupoDe(S.view)]; if(G.v.length<2) return ''; const B=S._badges||{};
   return `<nav class="subtabs" aria-label="${esc(G.l)}">${G.v.map(([k,l])=>`<a href="#${k}" ${k===S.view?'aria-current="page"':''}>${esc(l)}${B[k]?` <span class="badge">${B[k]}</span>`:''}</a>`).join('')}</nav>`; }
@@ -1116,16 +1116,17 @@ function lastEvText(b){ const h=b.hist||[]; const l=h[h.length-1]; return l? `${
 function vMant(){
   const M=mants().map(m=>({...m, est:mEstado(m)}));
   const groups={pendientes:m=>m.est==='vencido'||m.est==='en_curso'||m.est==='programado', vencidos:m=>m.est==='vencido', en_curso:m=>m.est==='en_curso', completados:m=>m.est==='completado'||m.est==='cancelado', todos:()=>true};
-  const L=M.filter(groups[S.mf]||groups.pendientes).sort((a,b)=> S.mf==='completados' ? (b.fechaReal||'').localeCompare(a.fechaReal||'') : (a.fechaProg||'').localeCompare(b.fechaProg||''));
+  const L=M.filter(groups[S.mf]||groups.pendientes).filter(m=>(!S.mPlan||m.planId===S.mPlan)&&(!S.mTipo||m.tipo===S.mTipo)&&(!S.mEjecutor||ejecutorClave(m)===S.mEjecutor)).sort((a,b)=> S.mf==='completados' ? (b.fechaReal||'').localeCompare(a.fechaReal||'') : (a.fechaProg||'').localeCompare(b.fechaProg||''));
   const cnt=k=>M.filter(groups[k]).length;
   const seg=[['pendientes','Pendientes'],['vencidos','Vencidos'],['en_curso','En curso'],['completados','Historial'],['todos','Todos']].map(([k,l])=>`<button data-act="mf" data-mf="${k}" aria-pressed="${S.mf===k}">${l} <span class="num">${cnt(k)}</span></button>`).join('');
   const rows=L.map(m=>{ const b=S.data.bienes[m.bienId]; const est=m.est==='vencido'?chip('Vencido','c-bad'):chip(MEST[m.est]?.l||m.est, MEST[m.est]?.c||'');
     const acts = m.est==='programado'||m.est==='vencido' ? `<button class="btn sm" data-act="mIniciar" data-id="${esc(m.id)}">Iniciar</button><button class="btn sm" data-act="mCompletar" data-id="${esc(m.id)}">Completar</button><button class="btn sm ghost" data-act="mCancelar" data-id="${esc(m.id)}">Cancelar</button>` : m.est==='en_curso' ? `<button class="btn sm primary" data-act="mCompletar" data-id="${esc(m.id)}">Completar</button>` : '';
-    return `<tr><td class="num" data-l="Fecha">${m.est==='completado'?fmtD(m.fechaReal):fmtD(m.fechaProg)}${m.est==='vencido'?`<div class="small" style="color:var(--bad)">hace ${-daysFrom(m.fechaProg)} días</div>`:''}</td><td class="w"><button class="btn link" data-act="openBien" data-id="${esc(m.bienId)}">${esc(bienLabel(b))}</button><div class="small muted">${esc(b?ubic(b)||b.area||'':'')}</div></td><td data-l="Tipo">${esc(m.tipo)}</td><td class="w" data-l="Trabajo">${esc(m.descripcion||'')}${m.resultado?`<div class="small muted">Resultado: ${esc(m.resultado)}</div>`:''}</td><td class="hide-sm">${esc(m.tecnico||'—')}</td><td data-l="Estado">${est}</td><td class="w acts"><div class="row ro-hide" style="flex-wrap:nowrap">${acts}</div></td></tr>`; }).join('');
-  return `<div class="row between"><h2>Mantenimientos</h2><button class="btn primary ro-hide" data-act="mNuevo">Programar mantenimiento</button></div>
-  <div class="row between"><div class="seg" role="group" aria-label="Filtrar mantenimientos">${seg}</div></div>
+    return `<tr><td class="num" data-l="Fecha">${m.est==='completado'?fmtD(m.fechaReal):fmtD(m.fechaProg)}${m.est==='vencido'?`<div class="small" style="color:var(--bad)">hace ${-daysFrom(m.fechaProg)} días</div>`:''}</td><td class="w"><button class="btn link" data-act="openBien" data-id="${esc(m.bienId)}">${esc(bienLabel(b))}</button><div class="small muted">${esc(b?ubic(b)||b.area||'':'')}</div></td><td data-l="Tipo">${esc(m.tipo)}</td><td class="w" data-l="Trabajo">${esc(m.descripcion||'')}${m.planId?`<div class="small muted">Plan: ${esc(S.data.planesPreventivos?.[m.planId]?.nombre||m.planId)}</div>`:''}${m.resultado?`<div class="small muted">Resultado: ${esc(m.resultado)}</div>`:''}</td><td class="hide-sm">${esc(m.tecnico||'—')}</td><td data-l="Estado">${est}</td><td class="w acts"><div class="row ro-hide" style="flex-wrap:nowrap">${acts}</div></td></tr>`; }).join('');
+  return `<div class="row between"><h2>Órdenes de trabajo</h2><button class="btn primary ro-hide" data-act="mNuevo">Programar mantenimiento</button></div>
+  <div class="row between"><div class="seg" role="group" aria-label="Filtrar mantenimientos">${seg}</div><button class="btn" data-act="go" data-v="fallas">Fallas reportadas (${fallas().filter(f=>f.estado==='reportada').length})</button></div>
+  ${mantFiltrosHtml()}
   <div class="card flush"><div class="tbl-wrap"><table class="stk"><thead><tr><th>Fecha</th><th>Bien</th><th>Tipo</th><th>Trabajo</th><th class="hide-sm">Técnico / proveedor</th><th>Estado</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="empty">No hay mantenimientos en esta lista.</td></tr>`}</tbody></table></div></div>
-  <p class="small muted" style="margin:0">Los preventivos con periodicidad se reprograman solos al completarlos. Si un mantenimiento deja el bien fuera de servicio, su etapa cambia a “En mantenimiento” hasta que lo completes.</p>`;
+  <p class="small muted" style="margin:0">Las órdenes de planes se crean con «Generar programación». Solo los preventivos manuales antiguos con periodicidad se reprograman al completarlos. Si un mantenimiento deja el bien fuera de servicio, su etapa cambia a “En mantenimiento” hasta que lo completes.</p>`;
 }
 
 /* ---------- Vista: Toma de inventario ---------- */
@@ -1246,6 +1247,7 @@ function renderDrawer(){
   <div class="dr-b">
     ${avisoFichaContable(id,b)}
     ${datosOperativosHtml(id,b)}
+    ${fallasFichaHtml(id)}
     <section><h3 class="sec">Estado</h3>${(()=>{ const v=(x)=>x&&x!=='Por evaluar'?esc(x):'<span class="sinev">Sin evaluar</span>'; return `<dl class="estbox"><div><dt>Conservación</dt><dd>${v(b.condicion)}</dd></div><div><dt>Operatividad</dt><dd>${v(b.oper)}</dd></div><div><dt>Tipo</dt><dd>${b.tipo?`${esc(TIPO[b.tipo]||b.tipo)} (${esc(b.tipo)})`:'<span class="sinev">Sin definir</span>'}</dd></div></dl>`; })()}</section>
     <section><h3 class="sec">Ubicación y custodio</h3>${sinUb?`<p class="hint">Aún no se conoce dónde está ni quién lo usa. Se completa al verificarlo en una toma de inventario.</p>`:''}<dl class="kv">${kv('Sede / edificio',b.sede)}${kv('Piso',b.piso)}${kv('Ambiente',b.ambiente)}${kv('Cuadrante',cuadDe(b))}${kv('Custodio / usuario',b.responsable)}${kv('Área (CR)',b.area)}${kv('Última verificación', b.inv? `${b.inv.r} · ${fmtD(b.inv.f)} · ${b.inv.toma||''}` : 'Sin verificación física')}${b.crs && b.crs.includes(';')?kv('CR asociados',b.crs,false,true):''}</dl>${(()=>{ const r=ambDe(b.amb); return r?`<div class="miniwrap">${planoHtml(r.p,{hl:r.a.id,mini:true})}<div class="small muted">Plano ${esc(planoNombre(r.p))} · ${esc(r.a.nombre)} <button class="btn link small" data-act="plOpen" data-id="${esc(r.p.id)}">Ver plano</button></div></div>`:''; })()}</section>
     ${afSistemasHtml(id)}
@@ -1359,21 +1361,42 @@ const ACT = {
 
   eliminar(id){ const b=S.data.bienes[id]; confirmBox('Eliminar registro', `Se eliminará “${bienLabel(b)}” y su historial. Úsalo solo para registros creados por error; para bienes reales usa “Solicitar baja”.`, 'Eliminar', async ()=>{ const ms=mants().filter(m=>m.bienId===id); for(const m of ms) await del('mantenimientos',m.id); await del('bienes',id); closeBien(); toast('Registro eliminado.'); }); },
   mProg(id){ ACT.mNuevo(id); },
-  mNuevo(bid){ const opts=bienes().filter(b=>ACTIVOS.includes(b.etapa)).sort((a,b)=>(a.codigo||'').localeCompare(b.codigo||'','es',{numeric:true}));
-    if(!opts.length){ toast('Primero registra un bien en uso.'); return; }
-    const fields = bid ? [{k:'bienCod',l:'Bien',v:bienLabel(S.data.bienes[bid]),full:true}] : [{k:'bienCod',l:'Código del bien',req:true,full:true,ph:'Escribe el código ADM, p. ej. EQUIPOS-0012',help:'Usa el código ADM o el código contable.'}];
-    openForm({title:'Programar mantenimiento', fields:[...fields, {k:'tipo',l:'Tipo',t:'select',opts:['Preventivo','Correctivo'],req:true}, {k:'fechaProg',l:'Fecha programada',t:'date',v:today(),req:true}, {k:'descripcion',l:'Trabajo a realizar',req:true,full:true,ph:'Ej.: Cambio de aceite y filtros'}, {k:'tecnico',l:'Técnico o proveedor'}, {k:'per',l:'Repetir cada (meses)',t:'number',help:'Solo preventivos. Déjalo vacío si no se repite.'}],
-      submit:async v=>{ let id0=bid; if(!id0){ const c=norm(v.bienCod); const b=opts.find(b=>norm(b.codigo)===c||norm(b.codCont)===c); if(!b) return {error:`No encontré un bien en uso con el código ${v.bienCod}.`}; id0=b.id; }
-        const id=uid(); await put('mantenimientos',id,{bienId:id0,tipo:v.tipo,fechaProg:v.fechaProg,descripcion:v.descripcion,tecnico:v.tecnico,per:v.per||null,estado:'programado',creado:nowIso(),u:S.me||null}); await bienPatch(id0,{}, ev(`Mantenimiento ${v.tipo.toLowerCase()} programado`, `${fmtD(v.fechaProg)} · ${v.descripcion}`)); toast('Mantenimiento programado.'); } });
-    if(!bid) attachSug('ff-bienCod','bcod');
-    else setTimeout(()=>{ const i=$('#ff-bienCod'); if(i) i.readOnly=true; },0); },
-  mIniciar(id){ const m=S.data.mantenimientos[id]; openForm({title:'Iniciar mantenimiento', fields:[{k:'fuera',l:'¿El bien queda fuera de servicio?',t:'select',opts:[['si','Sí, no se puede usar mientras dure'],['no','No, sigue operativo']],v:m.tipo==='Correctivo'?'si':'no',full:true}, {k:'tecnico',l:'Técnico o proveedor',v:m.tecnico}], ok:'Iniciar',
-    submit:async v=>{ await patch('mantenimientos',id,{estado:'en_curso',inicio:today(),tecnico:v.tecnico,fuera:v.fuera==='si'}); const b=S.data.bienes[m.bienId]; if(b) await bienPatch(m.bienId, v.fuera==='si' && b.etapa==='en_uso'?{etapa:'mantenimiento'}:{}, ev(`Mantenimiento ${m.tipo.toLowerCase()} iniciado`, `${m.descripcion}${v.fuera==='si'?' · fuera de servicio':''}`)); toast('Mantenimiento en curso.'); } }); },
-  mCancelar(id){ const m=S.data.mantenimientos[id]; openForm({title:'Cancelar mantenimiento', fields:[{k:'mot',l:'Motivo',req:true,full:true}], ok:'Cancelar mantenimiento', danger:true, submit:async v=>{ await patch('mantenimientos',id,{estado:'cancelado',resultado:'Cancelado: '+v.mot}); if(S.data.bienes[m.bienId]) await bienPatch(m.bienId,{}, ev('Mantenimiento cancelado', `${m.descripcion}: ${v.mot}`)); toast('Mantenimiento cancelado.'); } }); },
-  mCompletar(id){ const m=S.data.mantenimientos[id]; const b=S.data.bienes[m.bienId]||{}; openForm({title:'Completar mantenimiento', fields:[{k:'fechaReal',l:'Fecha de realización',t:'date',v:today(),req:true}, F.condicion(b.condicion==='Por evaluar'?'Bueno':b.condicion), F.oper(b.oper==='No probado'?'Operativo':b.oper), {k:'resultado',l:'Resultado / trabajo realizado',t:'textarea',req:true,full:true}, {k:'costo',l:'Costo (S/)',t:'number',help:'Opcional, solo como referencia.'}, {k:'tecnico',l:'Técnico o proveedor',v:m.tecnico}],
-    submit:async v=>{ await patch('mantenimientos',id,{estado:'completado',fechaReal:v.fechaReal,resultado:v.resultado,costo:v.costo,tecnico:v.tecnico,condFinal:v.condicion,operFinal:v.oper});
-      if(S.data.bienes[m.bienId]){ const f={condicion:v.condicion,oper:v.oper}; if(b.etapa==='mantenimiento' && !mants().some(x=>x.id!==id && x.bienId===m.bienId && x.estado==='en_curso' && x.fuera)) f.etapa='en_uso'; await bienPatch(m.bienId,f, ev(`Mantenimiento ${m.tipo.toLowerCase()} completado`, `${v.resultado} · ${v.condicion}, ${v.oper}${v.costo?` · S/ ${Number(v.costo).toFixed(2)}`:''}`)); }
-      if(m.tipo==='Preventivo' && m.per>0){ const nid=uid(); const fp=addMonths(v.fechaReal,m.per); await put('mantenimientos',nid,{bienId:m.bienId,tipo:'Preventivo',fechaProg:fp,descripcion:m.descripcion,tecnico:v.tecnico||m.tecnico,per:m.per,estado:'programado',creado:nowIso(),u:S.me||null,...(m.ejemplo?{ejemplo:true}:{})}); toast(`Completado. Próximo preventivo: ${fmtD(fp)}.`); } else toast('Mantenimiento completado.'); } }); },
+  mNuevo(bid,fallaId){
+    exigirEscritura();if(fallaId)exigirAdmin();const falla=fallaId&&S.data.fallas?.[fallaId];
+    const opts=bienes().filter(b=>ACTIVOS.includes(b.etapa)||fallaId&&b.id===bid).sort((a,b)=>(a.codigo||'').localeCompare(b.codigo||'','es',{numeric:true}));
+    if(!opts.length){toast('Primero registra un bien en uso.');return;}
+    const fields=bid?[{k:'bienCod',l:'Bien',v:bienLabel(S.data.bienes[bid]),full:true}]:[{k:'bienCod',l:'Código del bien',req:true,full:true,help:'Usa el código ADM o el código contable.'}];
+    openForm({title:fallaId?'Aceptar falla: orden correctiva':'Programar mantenimiento',fields:[...fields,{k:'tipo',l:'Tipo',t:'select',opts:fallaId?['Correctivo']:['Preventivo','Correctivo'],req:true,v:fallaId?'Correctivo':'Preventivo'},{k:'fechaProg',l:'Fecha programada',t:'date',v:today(),req:true},{k:'descripcion',l:'Trabajo a realizar',req:true,full:true,v:falla?.texto||''},...ejecutorFields(),...(!fallaId?[{k:'per',l:'Repetir cada (meses)',t:'number',help:'Solo preventivos manuales. Déjalo vacío si no se repite.'}]:[])],submit:async v=>{
+      exigirEscritura();if(fallaId)exigirAdmin();let id0=bid;if(!id0){const c=norm(v.bienCod),b=opts.find(b=>norm(b.codigo)===c||norm(b.codCont)===c);if(!b)return {error:`No encontré un bien en uso con el código ${v.bienCod}.`};id0=b.id;}
+      if(!S.data.bienes[id0]||S.data.bienes[id0]._del)return {error:'El bien ya no existe.'};if(!e3FechaValida(v.fechaProg))return {error:'Indica una fecha válida.'};
+      const id=fallaId?'OT-'+fallaId:uid(),d={bienId:id0,tipo:fallaId?'Correctivo':v.tipo,fechaProg:v.fechaProg,descripcion:v.descripcion,...ejecutorValores(v),...(!fallaId?{per:v.per||null}:{fallaId}),estado:'programado',creado:nowIso(),u:S.me||null};
+      if(fallaId){await transaccionCR(['fallas/'+fallaId,'mantenimientos/'+id],([f,m])=>{exigirAdmin();if(!f||f.estado!=='reportada'||f.bienId!==id0||m)throw new Error('La falla ya fue atendida.');return {writes:[['mantenimientos/'+id,d],['fallas/'+fallaId,{...f,estado:'aceptada',mantenimientoId:id,uResp:S.me,tResp:nowIso()}]]};});}
+      else{await put('mantenimientos',id,d);await bienPatch(id0,{},ev(`Mantenimiento ${v.tipo.toLowerCase()} programado`,`${fmtD(v.fechaProg)} · ${v.descripcion}`));}toast('Mantenimiento programado.');
+    }});if(!bid)attachSug('ff-bienCod','bcod');else $('#ff-bienCod').readOnly=true;ejecutorAjustar();
+  },
+  mIniciar(id){
+    exigirEscritura();const m=S.data.mantenimientos[id];if(!m||!ordenAbierta(m)||m.estado==='en_curso')return toast('La orden ya no está programada.');
+    openForm({title:'Iniciar mantenimiento',fields:[{k:'fuera',l:'¿El bien queda fuera de servicio?',t:'select',opts:[['si','Sí, no se puede usar mientras dure'],['no','No, sigue operativo']],v:m.tipo==='Correctivo'?'si':'no',full:true},...ejecutorFields(m)],ok:'Iniciar',submit:async v=>{
+      exigirEscritura();const actual=S.data.mantenimientos[id];if(!actual||actual.estado!=='programado')return {error:'La orden ya no está programada.'};
+      await patch('mantenimientos',id,{estado:'en_curso',inicio:today(),...ejecutorValores(v),fuera:v.fuera==='si'});const b=S.data.bienes[m.bienId];if(b)await bienPatch(m.bienId,v.fuera==='si'&&b.etapa==='en_uso'?{etapa:'mantenimiento'}:{},ev(`Mantenimiento ${m.tipo.toLowerCase()} iniciado`,`${m.descripcion}${v.fuera==='si'?' · fuera de servicio':''}`));toast('Mantenimiento en curso.');
+    }});ejecutorAjustar();
+  },
+  mCancelar(id){
+    exigirEscritura();const m=S.data.mantenimientos[id];if(!m||!ordenAbierta(m))return toast('La orden ya está cerrada.');
+    openForm({title:'Cancelar mantenimiento',fields:[{k:'mot',l:'Motivo',req:true,full:true}],ok:'Cancelar mantenimiento',danger:true,submit:async v=>{
+      exigirEscritura();if(!ordenAbierta(S.data.mantenimientos[id]||{}))return {error:'La orden ya está cerrada.'};await patch('mantenimientos',id,{estado:'cancelado',resultado:'Cancelado: '+v.mot});if(S.data.bienes[m.bienId])await bienPatch(m.bienId,{},ev('Mantenimiento cancelado',`${m.descripcion}: ${v.mot}`));toast('Mantenimiento cancelado.');
+    }});
+  },
+  mCompletar(id){
+    exigirEscritura();const m=S.data.mantenimientos[id];if(!m||!ordenAbierta(m))return toast('La orden ya está cerrada.');const b=S.data.bienes[m.bienId]||{},checklist=structuredClone(m.checklist||[]);
+    openForm({title:'Completar mantenimiento',fields:[{k:'fechaReal',l:'Fecha de realización',t:'date',v:today(),req:true},F.condicion(b.condicion==='Por evaluar'?'Bueno':b.condicion),F.oper(b.oper==='No probado'?'Operativo':b.oper),...(checklist.length?[{k:'hechas',l:'Tareas realizadas (todas obligatorias)',t:'checks',full:true,v:checklist.flatMap((x,i)=>x.ok?[String(i)]:[]),opts:checklist.map((x,i)=>[String(i),x.t]),help:'Si una tarea no aplica, márcala y explica el motivo en el trabajo realizado.'}]:[]),{k:'trabajo',l:'Trabajo realizado',t:'textarea',req:true,full:true,v:m.trabajo||m.resultado||''},{k:'costo',l:'Costo (S/)',t:'number',v:m.costo,help:'Opcional, mayor o igual a cero.'},...ejecutorFields(m)],submit:async v=>{
+      exigirEscritura();const actual=S.data.mantenimientos[id];if(!actual||!ordenAbierta(actual))return {error:'La orden ya está cerrada.'};if(JSON.stringify(actual.checklist||[])!==JSON.stringify(checklist))return {error:'Las tareas cambiaron. Abre de nuevo la orden.'};
+      if(checklist.some((_,i)=>!(v.hechas||[]).includes(String(i))))return {error:'Marca todas las tareas antes de completar.'};if(v.costo!=null&&(!Number.isFinite(v.costo)||v.costo<0))return {error:'El costo debe ser un número mayor o igual a cero.'};if(!e3FechaValida(v.fechaReal))return {error:'Indica una fecha válida.'};if(!v.trabajo.trim())return {error:'Describe el trabajo realizado.'};
+      const ejecutor=ejecutorValores(v);await patch('mantenimientos',id,{estado:'completado',fechaReal:v.fechaReal,resultado:v.trabajo,trabajo:v.trabajo,costo:v.costo,...ejecutor,condFinal:v.condicion,operFinal:v.oper,...(checklist.length?{checklist:checklist.map(x=>({...x,ok:true}))}:{})});
+      const bien=S.data.bienes[m.bienId];if(bien){const f={};if(bien.etapa==='mantenimiento'&&!mants().some(x=>x.id!==id&&x.bienId===m.bienId&&x.estado==='en_curso'&&x.fuera))f.etapa='en_uso';await bienPatch(m.bienId,f,ev(`Mantenimiento ${m.tipo.toLowerCase()} completado`,`${v.trabajo} · ${v.condicion}, ${v.oper}${v.costo?` · S/ ${Number(v.costo).toFixed(2)}`:''}`));}
+      if(!m.planId&&m.tipo==='Preventivo'&&m.per>0){const fp=addMonths(v.fechaReal,m.per);await put('mantenimientos',uid(),{bienId:m.bienId,tipo:'Preventivo',fechaProg:fp,descripcion:m.descripcion,...ejecutor,per:m.per,estado:'programado',creado:nowIso(),u:S.me||null,...(m.ejemplo?{ejemplo:true}:{})});toast(`Completado. Próximo preventivo: ${fmtD(fp)}.`);}else toast('Mantenimiento completado.');
+    }});ejecutorAjustar();
+  },
 
   /* inventario */
   tNueva(){ const now=new Date(); const mes=now.toLocaleDateString('es-PE',{timeZone:ZONA_FECHAS,month:'long',year:'numeric'});
@@ -1938,7 +1961,7 @@ async function respaldarTomaEliminada(t,C){
   if(new Blob([datos]).size>900000){await guardarArchivo(nombre,new Blob([datos],{type:'application/json'}));return {archivo:nombre};}
   await put('config',id,{tipo:'Respaldo antes de eliminar toma',formato:'json',fecha:nowIso(),tomaId:t.id,nombre:t.nombre||'',conteos:Object.keys(C).length,datos});return {id};
 }
-Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
+Object.assign(ACT,{ respaldo: async()=>{ const cols=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas','proveedores','planesPreventivos','fallas']; const out={app:'control-bienes',v:1,fecha:nowIso(),por:S.myName||'',colecciones:{}};
     cols.forEach(c=>{ out.colecciones[c]=structuredClone(S.data[c]||{}); });
     Object.keys(S.data.tomas||{}).forEach(id=>{ out.colecciones[`tomas/${id}/conteos`]=structuredClone(conteos(id)||{}); });
     for(const [tid,t]of Object.entries(S.data.tomas||{})){if(!esAnual(t))continue;const path=`tomas/${tid}/actasCR`;out.colecciones[path]=await coleccionCR(path);for(const op of Object.keys(out.colecciones[path]))out.colecciones[`${path}/${op}/filas`]=await coleccionCR(`${path}/${op}/filas`);}
@@ -2746,7 +2769,7 @@ document.addEventListener('change', e=>{
     guardaHere(); render(); setTimeout(()=>{ const n=t.dataset.hz==='pl'?'#h-am':(S.hAmbOtro?'#h-amb':'#scan'); $(n)?.focus(); },30); }
 });
 document.addEventListener('toggle',e=>{ if(e.target.classList?.contains('cr-progress')) S.anAvanceOpen=e.target.open; if(e.target.classList&&e.target.classList.contains('herebox')) S.hereOpen=e.target.open; },true);
-function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario','espacios','areas','personas','tipos'].includes(h)?h:'resumen'; render(); }
+function route(){ const a=document.activeElement; if(a && $('#main').contains(a)) a.blur(); const h=location.hash.replace('#',''); S.view=['resumen','bienes','ciclo','mantenimientos','sistemas','planos','inventario','espacios','areas','personas','tipos','planes','proveedores','fallas'].includes(h)?h:'resumen'; render(); }
 window.addEventListener('hashchange', ()=>{ route(); window.scrollTo(0,0); });
 
 /* ---------- Nombres de usuarios ---------- */
@@ -3071,7 +3094,86 @@ document.addEventListener('change',e=>{if(e.target.id!=='tb-fam')return;S.tbFam=
 const ES_MOVIL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini/i.test(navigator.userAgent) || (matchMedia('(pointer:coarse)').matches && !matchMedia('(any-pointer:fine)').matches);
 const LOCAL = /[?&]local\b/.test(location.search);
 let FS=null, AUTH=null; S.admin=false; S.usuarios={};
-const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas'];
+/* ---------- E3: proveedores, planes preventivos y fallas ---------- */
+const proveedores=()=>vivos(S.data.proveedores).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+const planesPreventivos=()=>vivos(S.data.planesPreventivos).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+const fallas=()=>vivos(S.data.fallas).sort((a,b)=>(b.t||'').localeCompare(a.t||''));
+const ordenAbierta=m=>!m._del&&['programado','en_curso'].includes(m.estado);
+function siguienteCatalogo(col,prefijo){let n=0;for(const id of Object.keys(S.data[col]||{})){const m=new RegExp('^'+prefijo+'-(\\d+)$').exec(id);if(m)n=Math.max(n,Number(m[1]));}return prefijo+'-'+String(n+1).padStart(4,'0');}
+function e3FechaValida(s){return /^\d{4}-\d{2}-\d{2}$/.test(s||'')&&Number.isFinite(Date.parse(s+'T12:00:00Z'))&&new Date(s+'T12:00:00Z').toISOString().slice(0,10)===s;}
+// Conserva el día o usa el último día del mes de destino (31 de enero + 1 mes = 28/29 de febrero).
+function ppFecha(s,n){const d=new Date(s+'T12:00:00Z'),dia=d.getUTCDate();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()+Number(n));const fin=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).getUTCDate();d.setUTCDate(Math.min(dia,fin));return d.toISOString().slice(0,10);}
+function ejecutorFields(d={},defecto=false){
+ const opts=[['otro',defecto?'Sin asignar / Otro (escribir)':'Otro (escribir)'],...personas().filter(p=>p.activa!==false).map(p=>['persona:'+p.id,'Persona: '+p.nombre]),...proveedores().filter(p=>p.activo!==false).map(p=>['proveedor:'+p.id,'Proveedor: '+p.nombre])];
+ const actual=d.personaId?'persona:'+d.personaId:d.proveedorId?'proveedor:'+d.proveedorId:'otro',v=opts.some(([k])=>k===actual)?actual:'otro';
+ return [{k:'ejecutor',l:defecto?'Ejecutor por defecto':'Ejecutor',t:'select',full:true,v,opts},
+ {k:'tecnico',l:'Otro: nombre del técnico o proveedor',v:v==='otro'?d.tecnico||'':'',full:true,help:'Se usa al elegir «Otro (escribir)».'}];}
+function ejecutorValores(v){
+ const [tipo,id]=String(v.ejecutor||'otro').split(':');
+ if(tipo==='otro')return {personaId:null,proveedorId:null,tecnico:String(v.tecnico||'').trim()};
+ const d=S.data[tipo==='persona'?'personas':'proveedores']?.[id];
+ if(!['persona','proveedor'].includes(tipo)||!d||d._del||d.activa===false||d.activo===false||d.unidaCon)throw new Error('Elige una persona o proveedor activo.');
+ return {personaId:tipo==='persona'?id:null,proveedorId:tipo==='proveedor'?id:null,tecnico:d.nombre};
+}
+function ejecutorAjustar(){const sel=$('#ff-ejecutor'),otro=$('#ff-tecnico');if(sel&&otro)otro.closest('.fld').hidden=sel.value!=='otro';}
+const ejecutorClave=m=>m.personaId?'persona:'+m.personaId:m.proveedorId?'proveedor:'+m.proveedorId:'otro:'+String(m.tecnico||'');
+function mantFiltrosHtml(){
+ const opciones=(id,l,opts,v)=>`<select class="inp" id="${id}" aria-label="${l}"><option value="">${l}</option>${opts.map(([k,n])=>`<option value="${esc(k)}" ${v===k?'selected':''}>${esc(n)}</option>`).join('')}</select>`;
+ const ejecutores=new Map();for(const m of mants())ejecutores.set(ejecutorClave(m),m.tecnico||'Sin ejecutor');
+ return `<div class="filters">${opciones('m-plan','Todos los planes',planesPreventivos().map(p=>[p.id,p.nombre]),S.mPlan)}${opciones('m-tipo','Todos los tipos',[['Preventivo','Preventivo'],['Correctivo','Correctivo']],S.mTipo)}${opciones('m-ejecutor','Todos los ejecutores',[...ejecutores],S.mEjecutor)}</div>`;
+}
+function vProveedores(){const q=nrm(S.prQ||''),L=proveedores().filter(p=>!q||nrm([p.nombre,p.ruc,p.especialidad,p.contacto].join(' ')).includes(q));return `<div class="row between"><h2>Proveedores</h2>${S.admin&&!S.readonly?'<button class="btn primary" data-act="prNuevo">Nuevo proveedor</button>':''}</div><input class="inp search" type="search" id="pr-q" aria-label="Buscar proveedores" placeholder="Buscar por nombre, RUC o especialidad" value="${esc(S.prQ||'')}"><div class="card flush"><div class="tbl-wrap"><table><thead><tr><th>Nombre / RUC</th><th>Contacto</th><th>Especialidad</th><th>Estado</th><th></th></tr></thead><tbody>${L.map(p=>`<tr><td>${esc(p.nombre)}<div class="small muted">${esc(p.ruc||'')}</div></td><td>${esc([p.contacto,p.telefono,p.correo].filter(Boolean).join(' · ')||'—')}</td><td>${esc(p.especialidad||'—')}</td><td>${p.activo===false?'Inactivo':'Activo'}</td><td>${S.admin&&!S.readonly?`<div class="row"><button class="btn sm" data-act="prEditar" data-id="${esc(p.id)}">Editar</button>${p.activo!==false?`<button class="btn sm" data-act="prDesactivar" data-id="${esc(p.id)}">Desactivar</button>`:''}</div>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">No hay proveedores.</td></tr>'}</tbody></table></div></div>`;}
+function proveedorForm(id){exigirAdmin();const d=S.data.proveedores?.[id]||{};openForm({title:id?'Editar proveedor':'Nuevo proveedor',fields:[{k:'nombre',l:'Nombre',req:true,v:d.nombre,full:true},...['ruc','contacto','telefono','correo','especialidad'].map(k=>({k,l:{ruc:'RUC (11 dígitos)',contacto:'Contacto',telefono:'Teléfono',correo:'Correo',especialidad:'Especialidad'}[k],v:d[k]})),{k:'activo',l:'Estado',t:'select',opts:[['si','Activo'],['no','Inactivo']],v:d.activo===false?'no':'si'}],submit:async v=>{
+ exigirAdmin();if(!v.nombre.trim())return {error:'Escribe el nombre.'};if(v.ruc&&!/^\d{11}$/.test(v.ruc))return {error:'El RUC debe tener 11 dígitos.'};if(v.correo&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.correo))return {error:'El correo no es válido.'};
+ const valor={...v,nombre:v.nombre.trim(),activo:v.activo==='si',act:nowIso()};if(id)await patch('proveedores',id,valor);else{const nuevo=siguienteCatalogo('proveedores','PRV');await transaccionCR(['proveedores/'+nuevo],([actual])=>{exigirAdmin();if(actual)throw new Error('Otro usuario creó un proveedor. Guarda otra vez.');return {writes:[['proveedores/'+nuevo,{...valor,creado:nowIso()}]]};});}toast('Proveedor guardado.');}});}
+function ppBienes(p){return bienes().filter(b=>b.etapa!=='baja'&&tipoDeBien(b)===p.tipoBienId);}
+function vPlanes(){return `<div class="row between"><h2>Planes preventivos</h2>${S.admin&&!S.readonly?'<div class="row"><button class="btn" data-act="ppNuevo">Nuevo plan</button><button class="btn primary" data-act="ppGenerar">Generar programación</button></div>':''}</div><div class="card flush"><div class="tbl-wrap"><table><thead><tr><th>Plan / Tipo</th><th>Frecuencia</th><th>Tareas</th><th>Ejecutor por defecto</th><th>Bienes</th><th>Estado</th><th></th></tr></thead><tbody>${planesPreventivos().map(p=>`<tr><td>${esc(p.nombre)}<div class="small muted">${esc(S.data.tiposBien?.[p.tipoBienId]?.nombre||'Sin tipo')}</div></td><td>${esc(p.frecuenciaMeses)} meses</td><td>${esc((p.tareas||[]).join(' · '))}</td><td>${esc(peNombre(p.personaId)||S.data.proveedores?.[p.proveedorId]?.nombre||p.tecnico||'Sin asignar')}</td><td class="num">${ppBienes(p).length}</td><td>${p.activo===false?'Inactivo':'Activo'}</td><td>${S.admin&&!S.readonly?`<button class="btn sm" data-act="ppEditar" data-id="${esc(p.id)}">Editar</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">No hay planes preventivos.</td></tr>'}</tbody></table></div></div>`;}
+function planForm(id){exigirAdmin();const p=S.data.planesPreventivos?.[id]||{};openForm({title:id?'Editar plan preventivo':'Nuevo plan preventivo',fields:[{k:'nombre',l:'Nombre',req:true,v:p.nombre,full:true},{k:'tipoBienId',l:'Tipo de bien',t:'select',req:true,v:p.tipoBienId,opts:[['','Elige un tipo'],...tiposBien().filter(t=>t.activo!==false||t.id===p.tipoBienId).map(t=>[t.id,t.nombre])]},{k:'frecuenciaMeses',l:'Frecuencia (meses)',t:'number',req:true,v:p.frecuenciaMeses||1},{k:'tareas',l:'Tareas (una por línea)',t:'textarea',req:true,full:true,v:(p.tareas||[]).join('\n')},...ejecutorFields(p,true),{k:'activo',l:'Estado',t:'select',opts:[['si','Activo'],['no','Inactivo']],v:p.activo===false?'no':'si'}],submit:async v=>{
+ exigirAdmin();const tipo=S.data.tiposBien?.[v.tipoBienId];if(!tipo||tipo._del)return {error:'Elige un tipo de bien.'};if(!Number.isInteger(v.frecuenciaMeses)||v.frecuenciaMeses<1||v.frecuenciaMeses>60)return {error:'La frecuencia debe ser un entero entre 1 y 60 meses.'};const tareas=v.tareas.split('\n').map(t=>t.trim()).filter(Boolean);if(!tareas.length)return {error:'Escribe al menos una tarea.'};
+ const d={nombre:v.nombre.trim(),tipoBienId:v.tipoBienId,frecuenciaMeses:v.frecuenciaMeses,tareas,...ejecutorValores(v),activo:v.activo==='si',act:nowIso()};if(!d.nombre)return {error:'Escribe el nombre.'};
+ if(id)await patch('planesPreventivos',id,d);else{const nuevo=siguienteCatalogo('planesPreventivos','PP');await transaccionCR(['planesPreventivos/'+nuevo],([actual])=>{exigirAdmin();if(actual)throw new Error('Otro usuario creó un plan. Guarda otra vez.');return {writes:[['planesPreventivos/'+nuevo,{...d,creado:nowIso()}]]};});}toast('Plan guardado.');}});ejecutorAjustar();}
+function ppPropuesta(ids,desde){
+ const M=mants().filter(m=>!m._del);return ids.map(id=>{const p=S.data.planesPreventivos?.[id];if(!p||p._del||p.activo===false)return null;const B=ppBienes(p),ordenes=[];
+ for(const b of B){const historial=M.filter(m=>m.planId===id&&m.bienId===b.id);if(historial.some(ordenAbierta))continue;
+ const ultima=historial.filter(m=>m.estado==='completado'&&e3FechaValida(m.fechaReal)).sort((a,b)=>b.fechaReal.localeCompare(a.fechaReal)||b.id.localeCompare(a.id))[0];
+ const fecha=ultima?ppFecha(ultima.fechaReal,p.frecuenciaMeses):desde;
+ ordenes.push({id:'MP-'+encodeURIComponent(id)+'-'+encodeURIComponent(b.id)+'-'+historial.length,bienId:b.id,fechaProg:fecha});}
+ const fechas=ordenes.map(o=>o.fechaProg).sort();return {id,p:limpiarDocumento(p),bienes:B.length,ordenes,primera:fechas[0]||'',ultima:fechas.at(-1)||''};}).filter(Boolean);
+}
+function ppProgreso(d,n,f){modalProgress(`${d} de ${n} órdenes procesadas${f?' · '+f+' con error':''}`);const progress=document.createElement('progress');progress.max=n;progress.value=d;progress.style.width='100%';progress.setAttribute('aria-label','Órdenes procesadas');$('#mextra')?.prepend(progress);}
+function ppVistaPrevia(ids,desde){
+ const Q=ppPropuesta(ids,desde),N=Q.reduce((n,x)=>n+x.ordenes.length,0);
+ openForm({title:'Vista previa de la programación',wide:true,note:`<div class="tbl-wrap"><table><thead><tr><th>Plan</th><th>Tipo</th><th>Bienes</th><th>Órdenes a crear</th><th>Primera fecha</th><th>Última fecha</th></tr></thead><tbody>${Q.map(x=>`<tr ${x.ordenes.length>100?'style="background:var(--warn-soft)"':''}><td>${esc(x.p.nombre)}</td><td>${esc(S.data.tiposBien?.[x.p.tipoBienId]?.nombre||'—')}</td><td>${x.bienes}</td><td><b>${x.ordenes.length}</b>${x.ordenes.length>100?' · Más de 100 órdenes':''}</td><td>${fmtD(x.primera)}</td><td>${fmtD(x.ultima)}</td></tr>`).join('')}</tbody></table></div><p>${N} órdenes a crear. No se cambia ninguna orden existente.</p>`,fields:Q.filter(x=>x.ordenes.length>100).map((x,i)=>({k:'conf'+i,l:'Confirmación de '+x.p.nombre,t:'checks',req:true,full:true,opts:[['si',`Confirmo crear ${x.ordenes.length} órdenes de ${x.p.nombre}`]]})),ok:'Confirmar programación',submit:async()=>{
+ exigirAdmin();if(!N){toast('No hay órdenes nuevas para crear.');return;}
+ if(Q.filter(x=>x.ordenes.length>100).some((x,i)=>!($('#ff-conf'+i+' input:checked'))))return {error:'Confirma la cantidad de órdenes de cada plan destacado.'};
+ // Una vista previa que cambió debe revisarse otra vez; nunca amplía la cantidad confirmada.
+ const actual=ppPropuesta(ids,desde);if(JSON.stringify(actual)!==JSON.stringify(Q))return {error:'La programación cambió. Vuelve a generar la vista previa.'};
+ S.abortar=false;let creadas=0;const r=await runMany(Q.flatMap(x=>x.ordenes.map(o=>async()=>{
+  exigirAdmin();const pair=mants().filter(m=>!m._del&&m.planId===x.id&&m.bienId===o.bienId);const abiertas=pair.filter(ordenAbierta);if(abiertas.length)return;
+  const paths=['mantenimientos/'+o.id,'planesPreventivos/'+x.id,'bienes/'+o.bienId,...pair.map(m=>'mantenimientos/'+m.id).filter(path=>path!=='mantenimientos/'+o.id)];
+  const creada=await transaccionCR(paths,([existe,p,b,...otras])=>{exigirAdmin();if(existe||otras.some(m=>m&&ordenAbierta(m)))return {value:false};if(!p||p.activo===false||JSON.stringify(limpiarDocumento(p))!==JSON.stringify(x.p)||!b||b.etapa==='baja'||tipoDeBien({...b,id:o.bienId})!==p.tipoBienId)throw new Error('El plan o el bien cambió.');
+   const ejecutor=ejecutorValores({ejecutor:p.personaId?'persona:'+p.personaId:p.proveedorId?'proveedor:'+p.proveedorId:'otro',tecnico:p.tecnico});
+   return {writes:[['mantenimientos/'+o.id,{bienId:o.bienId,planId:x.id,tipo:'Preventivo',fechaProg:o.fechaProg,descripcion:p.nombre,...ejecutor,checklist:p.tareas.map(t=>({t,ok:false})),estado:'programado',creado:nowIso(),u:S.me||null}]],value:true};});if(creada)creadas++;
+ })),4,(d,n,f)=>ppProgreso(d,n,f));
+ if(r.fail)return {error:`Se crearon ${creadas} órdenes; ${r.fail} no se pudieron crear. Genera otra vista previa para reintentar sin duplicados.`};toast(`${creadas} órdenes creadas.`);
+ }});
+}
+function fallasFichaHtml(id){const L=fallas().filter(f=>f.bienId===id&&f.estado==='reportada');return `<section data-fallas-bien><h3 class="sec">Fallas reportadas (${L.length})</h3>${L.map(f=>`<p>${esc(f.texto)}<span class="small muted"> · ${esc(who(f.u))} · ${fmtDT(f.t)}</span></p>`).join('')||'<p class="hint">No hay fallas abiertas.</p>'}${!S.readonly?`<button class="btn sm" data-act="fReportar" data-id="${esc(id)}">Reportar falla</button>`:''}</section>`;}
+function vFallas(){const L=fallas(),n=L.filter(f=>f.estado==='reportada').length;return `<h2>Fallas reportadas (${n})</h2><div class="card"><div class="list">${L.map(f=>`<div class="li"><div class="grow"><button class="btn link" data-act="openBien" data-id="${esc(f.bienId)}">${esc(bienLabel(S.data.bienes[f.bienId]))}</button><p>${esc(f.texto)}</p><div class="small muted">${esc(who(f.u))} · ${fmtDT(f.t)} · ${esc({reportada:'Reportada',aceptada:'Aceptada',descartada:'Descartada'}[f.estado]||f.estado)}${f.motivo?' · '+esc(f.motivo):''}${f.mantenimientoId?' · Orden '+esc(f.mantenimientoId):''}</div></div>${f.estado==='reportada'&&S.admin&&!S.readonly?`<div class="row"><button class="btn sm" data-act="fAceptar" data-id="${esc(f.id)}">Aceptar</button><button class="btn sm" data-act="fDescartar" data-id="${esc(f.id)}">Descartar</button></div>`:''}</div>`).join('')||'<p class="empty">No hay fallas reportadas.</p>'}</div></div>`;}
+Object.assign(ACT,{
+ prNuevo(){proveedorForm();},prEditar(id){proveedorForm(id);},
+ prDesactivar(id){exigirAdmin();confirmBox('Desactivar proveedor','El proveedor dejará de estar disponible para nuevas asignaciones. Las órdenes anteriores se conservan.','Desactivar',async()=>{exigirAdmin();await patch('proveedores',id,{activo:false,act:nowIso()});});},
+ ppNuevo(){planForm();},ppEditar(id){planForm(id);},
+ ppGenerar(){exigirAdmin();const P=planesPreventivos().filter(p=>p.activo!==false);openForm({title:'Generar programación',fields:[{k:'desde',l:'Programar desde',t:'date',req:true,v:today()},{k:'planes',l:'Planes a incluir',t:'checks',full:true,req:true,v:P.map(p=>p.id),opts:P.map(p=>[p.id,p.nombre])}],ok:'Ver vista previa',submit:async v=>{exigirAdmin();if(!e3FechaValida(v.desde))return {error:'Indica una fecha válida.'};if(v.planes.some(id=>!P.some(p=>p.id===id)))return {error:'Elige los planes de la lista.'};ppVistaPrevia(v.planes,v.desde);return {keep:true};}});},
+ fReportar(bienId){exigirEscritura();openForm({title:'Reportar falla',note:esc(bienLabel(S.data.bienes[bienId])),fields:[{k:'texto',l:'Describe la falla (máximo 500 caracteres)',t:'textarea',full:true,req:true}],submit:async v=>{exigirEscritura();const texto=v.texto.trim();if(!texto||texto.length>500)return {error:'Escribe la falla con un máximo de 500 caracteres.'};if(!S.data.bienes[bienId]||S.data.bienes[bienId]._del)return {error:'El bien ya no existe.'};const t=nowIso(),id='FA-'+today().replaceAll('-','')+'-'+uid();await put('fallas',id,{bienId,texto,u:S.me,t,estado:'reportada',mantenimientoId:null,motivo:'',uResp:null,tResp:null});toast('Falla reportada.');}});$('#ff-texto').maxLength=500;},
+ fAceptar(id){exigirAdmin();const f=S.data.fallas?.[id];if(!f||f.estado!=='reportada')return toast('La falla ya fue atendida.');ACT.mNuevo(f.bienId,id);},
+ fDescartar(id){exigirAdmin();openForm({title:'Descartar falla',fields:[{k:'motivo',l:'Motivo',t:'textarea',req:true,full:true}],submit:async v=>{exigirAdmin();if(!v.motivo.trim())return {error:'Escribe el motivo.'};await transaccionCR(['fallas/'+id],([f])=>{exigirAdmin();if(!f||f.estado!=='reportada')throw new Error('La falla ya fue atendida.');return {writes:[['fallas/'+id,{...f,estado:'descartada',motivo:v.motivo.trim(),uResp:S.me,tResp:nowIso()}]]};});toast('Falla descartada.');}});}
+});
+for(const n of ['prNuevo','prEditar','prDesactivar','ppNuevo','ppEditar','ppGenerar','fAceptar','fDescartar'])ADMIN_ACT.add(n);
+document.addEventListener('input',e=>{if(e.target.id==='pr-q'){S.prQ=e.target.value;render();}});
+document.addEventListener('change',e=>{if(e.target.id==='ff-ejecutor')ejecutorAjustar();const k={'m-plan':'mPlan','m-tipo':'mTipo','m-ejecutor':'mEjecutor'}[e.target.id];if(k){S[k]=e.target.value;render();}});
+
+const COLS=['bienes','mantenimientos','tomas','sistemas','equipos','planos','config','espacios','areas','personas','tiposBien','dudas','proveedores','planesPreventivos','fallas'];
 const PATH_OK = p => COLS.includes(p) || /^tomas\/[^/]+\/conteos$/.test(p);
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 const LOGO='<svg width="40" height="40" viewBox="0 0 28 28" aria-hidden="true"><rect x="1" y="1" width="26" height="26" rx="6" fill="var(--accent)"/><path d="M8 9h12M8 14h12M8 19h7" stroke="var(--accent-ink)" stroke-width="2.2" stroke-linecap="round"/><circle cx="20" cy="19" r="2" fill="var(--accent-ink)"/></svg>';
